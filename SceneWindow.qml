@@ -191,7 +191,11 @@ PanelWindow {
   }
 
   // Every window that still exists, on any workspace or monitor: their snow
-  // is kept aside while they are out of sight instead of falling.
+  // is kept aside while they are out of sight instead of falling. One that
+  // drops out of the toplevel list for a moment (a workspace switch can do
+  // that) counts as alive for a grace period, unless Hyprland said it
+  // closed (Policy.graceAlive).
+  property var aliveMemo: ({})
   function aliveIds() {
     var ids = []
     if (!service) return ids
@@ -200,7 +204,15 @@ PanelWindow {
       var id = windowId(all[i].lastIpcObject, all[i])
       if (id && service.windowExists(id)) ids.push(id)
     }
-    return ids
+    return Policy.graceAlive(aliveMemo, ids, Date.now(), Policy.ALIVE_GRACE_MS, function(k) { return service.windowWasClosed(k) })
+  }
+  // Alive, or out of the list only for a moment (see aliveIds): a snowman
+  // riding it stays on.
+  function windowAlive(id) {
+    if (!service || !id) return false
+    if (service.windowExists(id)) return true
+    var k = "0x" + service.addrKey(id)
+    return aliveMemo[k] !== undefined && Date.now() - aliveMemo[k] <= Policy.ALIVE_GRACE_MS && !service.windowWasClosed(k)
   }
 
   // True for a moment after any window here moved, so decorations riding
@@ -680,7 +692,7 @@ PanelWindow {
     for (var i = 0; i < list.length; i++) {
       var m = list[i], pl = m.place
       if (pl.screen !== screenName || (!pl.windowAddress && !pl.windowClass)) continue
-      if (pl.windowAddress && service.windowExists(pl.windowAddress)) {
+      if (pl.windowAddress && windowAlive(pl.windowAddress)) {
         // Its window went to another monitor: it goes along.
         if (!rectFor(pl.windowAddress)) {
           var other = service.sceneShowing(pl.windowAddress)

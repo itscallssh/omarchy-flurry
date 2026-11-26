@@ -406,6 +406,12 @@ Item {
     if (!k || root.closedWindows[k]) return false
     return root.liveWindows === null || root.liveWindows[k] === true
   }
+  // Whether Hyprland said this window closed (and no new window has
+  // opened at its address since).
+  function windowWasClosed(addr) {
+    var k = addrKey(addr)
+    return !!k && !!root.closedWindows[k]
+  }
   function windowClosed(addr) {
     var k = addrKey(addr)
     if (!k) return
