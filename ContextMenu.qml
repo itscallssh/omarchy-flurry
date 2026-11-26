@@ -13,13 +13,14 @@ Rectangle {
   readonly property var rows: {
     if (!target || !service) return []
     var out = []
+    var tr = function(k, fb) { return service && service.tr ? service.tr(k) : fb }
     if (target.kind === "tree" || target.kind === "snowman") {
-      if (!service.identity) out.push({ label: "Set up friends…", action: "setup" })
-      else if (!service.friends.length) out.push({ label: "Add a friend from clipboard", action: "addFriend" })
+      if (!service.identity) out.push({ label: tr("menu.setupFriends", "Set up friends…"), action: "setup" })
+      else if (!service.friends.length) out.push({ label: tr("menu.addFriend", "Add a friend from clipboard"), action: "addFriend" })
       for (var i = 0; i < service.friends.length; i++)
-        out.push({ label: "Send to " + service.friends[i].name, action: "send", friend: service.friends[i].id })
+        out.push({ label: tr("menu.sendTo", "Send to %1").arg(service.friends[i].name), action: "send", friend: service.friends[i].id })
     }
-    out.push({ label: "Remove", action: "remove" })
+    out.push({ label: tr("menu.remove", "Remove"), action: "remove" })
     return out
   }
 
@@ -48,6 +49,7 @@ Rectangle {
         Text {
           anchors.verticalCenter: parent.verticalCenter
           x: 10
+          textFormat: Text.PlainText
           text: modelData.label
           color: modelData.action === "remove" ? Commons.Color.urgent : Commons.Color.popups.text
           font.family: Style.font.family

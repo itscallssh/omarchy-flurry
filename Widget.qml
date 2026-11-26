@@ -42,6 +42,7 @@ BarWidget {
   property bool popupOpen: false
   property string view: "scene"
   property string actionNote: ""
+  property string friendNote: ""
   property var hare: ({ here: false, why: "" })
   // The shell opens and closes the panel through these (a hotkey,
   // `omarchy-shell shell toggle itscallssh.flurry`): Bar.findPanelWidget
@@ -65,7 +66,7 @@ BarWidget {
     return why
   }
   function refreshHare() { if (root.service) root.hare = root.service.visitorStatus("rabbit") }
-  onPopupOpenChanged: { if (popupOpen) { root.actionNote = ""; refreshHare() } }
+  onPopupOpenChanged: { if (popupOpen) { root.actionNote = ""; root.friendNote = ""; refreshHare() } }
 
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
@@ -237,13 +238,26 @@ BarWidget {
     anchorItem: root
     bar: root.bar
     owner: root
-    open: root.popupOpen && !!root.service
+    open: root.popupOpen
     contentWidth: popup.fittedContentWidth(Style.space(380))
-    contentHeight: popup.fittedContentHeight(body.implicitHeight)
+    contentHeight: popup.fittedContentHeight(root.service ? body.implicitHeight : missingNote.implicitHeight)
+
+    PlainText {
+      id: missingNote
+      anchors.centerIn: parent
+      width: popup.contentWidth
+      visible: !root.service
+      text: strings.t("service.unavailable")
+      wrapMode: Text.Wrap
+      opacity: 0.8
+    }
 
     Flickable {
       id: flick
       anchors.fill: parent
+      visible: !!root.service
+      focus: root.popupOpen
+      Keys.onEscapePressed: root.close()
       contentWidth: width
       contentHeight: body.implicitHeight
       clip: contentHeight > height
@@ -540,6 +554,18 @@ BarWidget {
             maximumLength: 80
             onAccepted: { if (text.trim() !== "") { root.service.setWeatherCity(text); text = "" } }
           }
+          PlainText {
+            Layout.fillWidth: true
+            visible: !!root.saved.liveWeather && !!root.service
+                     && (root.service.weatherStatus === "loading" || root.service.weatherStatus === "not_found" || root.service.weatherStatus === "error")
+            text: !root.service ? ""
+              : (root.service.weatherStatus === "loading" ? strings.t("weather.searching").arg(root.saved.weatherPlace || root.saved.weatherCity || "Open-Meteo")
+              : (root.service.weatherStatus === "not_found" ? strings.t("weather.notFound").arg(root.service.missingCity || root.saved.weatherCity || "")
+              : strings.t("weather.error")))
+            font.pixelSize: Style.font.caption
+            wrapMode: Text.Wrap
+            opacity: 0.75
+          }
           FlagCard { flag: "dayCycle" }
           FlagCard { flag: "windGusts" }
 
@@ -607,6 +633,24 @@ BarWidget {
             ActionButton { iconText: root.glyph("paste"); text: strings.t("friends.add"); onClicked: root.service.addFriendFromClipboard() }
           }
 
+          RowLayout {
+            Layout.fillWidth: true
+            visible: !!root.service && !!root.service.identity
+            spacing: Style.space(8)
+            PlainText { text: strings.t("friends.yourName"); font.pixelSize: Style.font.caption; opacity: 0.75 }
+            TextField {
+              id: nameField
+              Layout.fillWidth: true
+              placeholderText: strings.t("friends.namePlaceholder")
+              text: root.service && root.service.identity ? root.service.identity.name : ""
+              maximumLength: 40
+              onAccepted: {
+                var n = text.trim()
+                if (n !== "" && root.service) { root.service.setupFriends(n); focus = false }
+              }
+            }
+          }
+
           PanelSectionHeader {
             visible: !!root.service && root.service.friends.length > 0
             text: strings.t("section.friends").toUpperCase()
@@ -616,6 +660,7 @@ BarWidget {
             model: root.service ? root.service.friends : []
             delegate: BorderSurface {
               required property var modelData
+              readonly property bool isThrowTarget: !!root.service && !!root.service.throwFriend && root.service.throwFriend.id === modelData.id
               Layout.fillWidth: true
               implicitHeight: friendRow.implicitHeight + Style.space(16)
               radius: Style.cornerRadius
@@ -628,10 +673,23 @@ BarWidget {
                 PlainText { text: root.glyph("gift"); font.pixelSize: Style.font.icon; opacity: 0.7 }
                 PlainText { Layout.fillWidth: true; text: modelData.name; elide: Text.ElideRight; font.bold: true }
                 Button {
+                  iconText: root.glyph("snowball")
+                  tooltipText: strings.t("friends.throwTarget")
+                  opacity: isThrowTarget ? 1 : 0.45
+                  onClicked: root.service.setThrowTarget(modelData.id)
+                }
+                Button {
                   iconText: root.glyph("send")
                   tooltipText: strings.t("friends.sendNote")
                   enabled: noteField.text.trim() !== ""
-                  onClicked: { if (root.service.sendNote(modelData.id, noteField.text)) noteField.text = "" }
+                  onClicked: {
+                    if (root.service.sendNote(modelData.id, noteField.text)) {
+                      root.friendNote = strings.t("friends.noteSent").arg(modelData.name)
+                      noteField.text = ""
+                    } else {
+                      root.friendNote = strings.t("friends.noteFailed")
+                    }
+                  }
                 }
                 Button {
                   iconText: root.glyph("remove")
@@ -647,6 +705,25 @@ BarWidget {
             visible: !!root.service && root.service.friends.length > 0
             placeholderText: strings.t("friends.notePlaceholder")
             maximumLength: 280
+            onAccepted: {
+              var txt = text.trim()
+              var target = root.service ? (root.service.throwFriend || root.service.friends[0]) : null
+              if (!txt || !target) return
+              if (root.service.sendNote(target.id, txt)) {
+                root.friendNote = strings.t("friends.noteSent").arg(target.name)
+                text = ""
+              } else {
+                root.friendNote = strings.t("friends.noteFailed")
+              }
+            }
+          }
+          PlainText {
+            Layout.fillWidth: true
+            visible: root.friendNote !== ""
+            text: root.friendNote
+            font.pixelSize: Style.font.caption
+            wrapMode: Text.Wrap
+            opacity: 0.75
           }
           FlagCard {
             visible: !!root.service && root.service.friends.length > 0

@@ -18,7 +18,7 @@ test("every library call in the QML is imported and defined", () => {
     const src = fs.readFileSync(path.join(root, q), "utf8").split("\n").map(l => l.replace(/(^|\s)\/\/ .*$/, "")).join("\n")
     const imports = {}
     for (const m of src.matchAll(/^import "lib\/(\w+\.js)" as (\w+)/mg)) imports[m[2]] = m[1]
-    for (const m of src.matchAll(/\b(Sim|Draw|Policy|Store|Season|Weather|Theme)\.([A-Za-z_]\w*)/g)) {
+    for (const m of src.matchAll(/\b(Sim|Draw|Policy|Store|Season|Weather|Theme|Snd)\.([A-Za-z_]\w*)/g)) {
       assert.ok(imports[m[1]], `${q} uses ${m[1]}.${m[2]} without importing ${m[1]}`)
       assert.ok(m[2] in libs[imports[m[1]]], `${q}: ${m[1]}.${m[2]} is not defined in lib/${imports[m[1]]}`)
       checked++
@@ -43,14 +43,24 @@ test("every bin/flurry command reaches a ShellIpc function", () => {
 test("no QML object sets a handler, property or function twice (a load error that takes the whole plugin down)", () => {
   for (const q of fs.readdirSync(root).filter(f => f.endsWith(".qml"))) {
     const lines = fs.readFileSync(path.join(root, q), "utf8").split("\n")
-    const seen = {}
+    const stack = [{}]
     for (const l of lines) {
-      // The root object's own members sit at two spaces.
-      const m = /^  (?:(on[A-Z]\w*):|(?:readonly )?property \S+ (\w+)|function (\w+)\()/.exec(l)
-      if (!m) continue
-      const key = m[1] || m[2] || m[3]
-      assert.ok(!seen[key], `${q}: ${key} is declared twice`)
-      seen[key] = true
+      const stripped = l.replace(/\/\/.*$/, "")
+      const indent = /^(\s*)/.exec(l)[1]
+      const depth = stack.length
+      if (depth > 0) {
+        const m = /^\s*(?:(on[A-Z]\w*):|(?:readonly |required )?property \S+ (\w+)|function (\w+)\()/.exec(stripped)
+        if (m && !/\{.*\}/.test(stripped)) {
+          const key = m[1] || m[2] || m[3]
+          const top = stack[stack.length - 1]
+          assert.ok(!top[key], `${q}: ${key} is declared twice in the same block (indent ${indent.length})`)
+          top[key] = true
+        }
+      }
+      for (const ch of stripped) {
+        if (ch === "{") stack.push({})
+        else if (ch === "}" && stack.length > 1) stack.pop()
+      }
     }
   }
 })
@@ -63,8 +73,11 @@ test("every string the panel reads has an English entry, and each catalog has th
     assert.deepStrictEqual(Object.keys(cat).sort(), Object.keys(en).sort(), f)
     for (const k in cat) assert.strictEqual((cat[k].match(/%1/g) || []).length, (en[k].match(/%1/g) || []).length, `${f}: ${k} placeholders`)
   }
+  for (const q of fs.readdirSync(root).filter(f => f.endsWith(".qml"))) {
+    const src = fs.readFileSync(path.join(root, q), "utf8")
+    for (const m of src.matchAll(/(?:strings\.t|tr|labelFor)\("([^"]+)"[,)]/g)) assert.ok(m[1] in en, `${q}: no English string ${m[1]}`)
+  }
   const src = fs.readFileSync(path.join(root, "Widget.qml"), "utf8")
-  for (const m of src.matchAll(/strings\.t\("([^"]+)"\)/g)) assert.ok(m[1] in en, "no English string " + m[1])
   for (const e of ["snow", "leaves", "starfall", "rain", "sakura", "fireflies"]) assert.ok("effect." + e in en, e)
   for (const m of src.matchAll(/flag: "(\w+)"/g)) assert.ok("flag." + m[1] in en && "flag." + m[1] + ".desc" in en, m[1])
 })

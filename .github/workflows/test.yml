@@ -1,0 +1,21 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Run Node test suite
+        run: node --test tests/*.test.js
+      - name: Run Hyprland anchor protocol tests
+        run: make -C hyprland-plugin test
+      - name: Check CLI syntax
+        run: bash -n bin/flurry

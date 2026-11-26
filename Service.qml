@@ -24,6 +24,8 @@ Item {
   property string omarchyPath: ""
 
   readonly property string pluginId: manifest && manifest.id ? manifest.id : "itscallssh.flurry"
+  Translations { id: strings; directory: Qt.resolvedUrl("i18n") }
+  function tr(key) { return strings.t(key) }
 
   // ------------------------------------------------------------------ state
 
@@ -52,7 +54,14 @@ Item {
   readonly property real quality: gate.quality
   readonly property int fpsCap: gate.fps
 
-  readonly property string stateDir: (Quickshell.env("XDG_STATE_HOME") || (Quickshell.env("HOME") + "/.local/state")) + "/omarchy-flurry"
+  readonly property string stateDir: {
+    var base = Quickshell.env("XDG_STATE_HOME")
+    if (!base) {
+      var home = Quickshell.env("HOME")
+      base = home ? home + "/.local/state" : ""
+    }
+    return base ? base + "/omarchy-flurry" : ""
+  }
 
   // Replace the saved state with a changed copy, so bindings see a new object.
   function update(mutator) {
@@ -101,22 +110,34 @@ Item {
 
   Process {
     id: makeStateDir
-    command: ["mkdir", "-p", root.stateDir]
+    command: root.stateDir ? ["install", "-d", "-m", "700", root.stateDir] : ["true"]
     running: true
-    onExited: stateFile.path = root.stateDir + "/state.json"
+    onExited: function(code) {
+      if (code === 0 && root.stateDir) stateFile.path = root.stateDir + "/state.json"
+      else { root.saved = Store.defaults(); root.loaded = true }
+    }
   }
 
   FileView {
     id: stateFile
     printErrors: false
     atomicWrites: true
+    watchChanges: true
+    onFileChanged: reload()
     onLoaded: {
       var raw = null
-      try { raw = JSON.parse(text()) } catch (e) {
+      var body = text()
+      var parseFailed = false
+      if (body.length > 262144) {
+        parseFailed = true
+      } else {
+        try { raw = JSON.parse(body) } catch (e) { parseFailed = true }
+      }
+      if (parseFailed) {
         // Keep the unreadable file beside the fresh one: it holds the
         // friend code and everything placed, and the next save replaces it.
         console.warn("flurry: state.json unreadable, starting fresh (kept as state.json.broken)")
-        Quickshell.execDetached(["cp", "-f", "--", stateFile.path, stateFile.path + ".broken"])
+        Quickshell.execDetached(["cp", "-f", "--remove-destination", "--", stateFile.path, stateFile.path + ".broken"])
       }
       root.saved = Store.normalize(raw)
       root.loaded = true
@@ -125,12 +146,31 @@ Item {
       root.saved = Store.defaults()
       root.loaded = true
     }
+    onSaveFailed: function(error) { console.warn("flurry: could not save state.json: " + error) }
   }
 
   Timer {
     id: saveTimer
     interval: 800
     onTriggered: if (root.loaded && stateFile.path !== "") stateFile.setText(JSON.stringify(root.saved, null, 2) + "\n")
+  }
+
+  Component.onDestruction: {
+    if (saveTimer.running) {
+      saveTimer.stop()
+      if (root.loaded && stateFile.path !== "") stateFile.setText(JSON.stringify(root.saved, null, 2) + "\n")
+    }
+    cliBedPlayer.pendingRestart = false
+    cliBedPlayer.running = false
+    inboxProc.running = false
+    geoProc.running = false
+    weatherProc.running = false
+    sendProc.running = false
+    pasteProc.running = false
+    clientsProc.running = false
+    cursorSocket.connected = false
+    anchorSocket.connected = false
+    if (root.anchorAvailable) Quickshell.execDetached(["hyprctl", "flurry", "clearall"])
   }
 
   // ------------------------------------------------------------ decorations
@@ -144,6 +184,7 @@ Item {
   function unregisterScene(name, scene) {
     if (root.scenes[name] !== scene) return
     var next = Object.assign({}, root.scenes); delete next[name]; root.scenes = next
+    if (root.decorating === name) root.decorating = ""
     sceneShown(name, false)
   }
 
@@ -194,7 +235,10 @@ Item {
   }
   function addGift(place, extra) {
     var g = Store.normalizeGift(Object.assign({ place: place }, extra || {}))
-    update(function(s) { s.gifts.push(g) })
+    update(function(s) {
+      if (s.gifts.length >= Store.MAX_GIFTS) s.gifts = s.gifts.slice(-(Store.MAX_GIFTS - 1))
+      s.gifts.push(g)
+    })
     return g.id
   }
   function listFor(kind) {
@@ -391,28 +435,46 @@ Item {
     // so the answer is never older than the last event.
     property bool again: false
     property real startedAt: 0
+    property var collector: Policy.newCollector(262144)
     command: ["hyprctl", "-j", "clients"]
-    onExited: if (again) { again = false; root.readClients() }
-    stdout: StdioCollector {
-      onStreamFinished: {
-        var list = null
-        try { list = JSON.parse(String(text || "")) } catch (e) { list = null }
-        if (!(list instanceof Array)) return
-        var live = {}
-        for (var i = 0; i < list.length; i++) if (list[i] && list[i].address) live[root.addrKey(list[i].address)] = true
-        // A window this says exists, that closed before this read began,
-        // is a new window at a reused address. One that closed while the
-        // read ran is closed: the reply is older than the event.
-        var closed = root.closedWindows, changed = false, nextClosed = Object.assign({}, closed)
-        for (var k in live) {
-          if (!nextClosed[k]) continue
-          if (nextClosed[k] < clientsProc.startedAt) { delete nextClosed[k]; changed = true }
-          else delete live[k]
+    stdout: SplitParser {
+      splitMarker: ""
+      onRead: function(chunk) {
+        if (!Policy.collectChunk(clientsProc.collector, chunk)) {
+          console.warn("flurry: hyprctl clients output exceeded 256 KiB; aborting")
+          clientsProc.running = false
         }
-        if (changed) root.closedWindows = nextClosed
-        root.liveWindows = live
-        root.windowEpoch++
       }
+    }
+    stderr: SplitParser { splitMarker: ""; onRead: function() {} }
+    onExited: function(code) {
+      var c = clientsProc.collector
+      clientsProc.collector = Policy.newCollector(262144)
+      if (code === 0 && !c.overflowed) {
+        var list = null
+        try { list = JSON.parse(c.buf) } catch (e) { list = null }
+        if (list instanceof Array) {
+          var live = {}
+          for (var i = 0; i < list.length; i++) if (list[i] && list[i].address) live[root.addrKey(list[i].address)] = true
+          // A window this says exists, that closed before this read began,
+          // is a new window at a reused address. One that closed while the
+          // read ran is closed: the reply is older than the event.
+          var closed = root.closedWindows, changed = false, nextClosed = Object.assign({}, closed)
+          for (var k in live) {
+            if (!nextClosed[k]) continue
+            if (nextClosed[k] < clientsProc.startedAt) { delete nextClosed[k]; changed = true }
+            else delete live[k]
+          }
+          if (changed) root.closedWindows = nextClosed
+          root.liveWindows = live
+          root.windowEpoch++
+        } else {
+          console.warn("flurry: hyprctl clients returned unexpected output")
+        }
+      } else if (code !== 0) {
+        console.warn("flurry: hyprctl clients exited with code " + code)
+      }
+      if (again) { again = false; root.readClients() }
     }
   }
   Timer {
@@ -431,6 +493,7 @@ Item {
     onTriggered: if (!clientsProc.running) root.readClients()
   }
   function readClients() {
+    clientsProc.collector = Policy.newCollector(262144)
     clientsProc.startedAt = Date.now()
     clientsProc.running = true
   }
@@ -492,17 +555,30 @@ Item {
   property int windowBorder: 2
   property bool borderRead: false
   onShowingChanged: if (showing && !borderRead) readBorder()
-  function readBorder() { borderRead = true; if (!borderProc.running) borderProc.running = true }
+  function readBorder() {
+    borderRead = true
+    if (borderProc.running) return
+    borderProc.collector = Policy.newCollector(4096)
+    borderProc.running = true
+  }
   Process {
     id: borderProc
+    property var collector: Policy.newCollector(4096)
     command: ["hyprctl", "-j", "getoption", "general:border_size"]
-    stdout: StdioCollector {
-      onStreamFinished: {
-        var o = null
-        try { o = JSON.parse(String(text || "")) } catch (e) { o = null }
-        var b = o ? Number(o.int !== undefined ? o.int : o.value) : NaN
-        if (isFinite(b) && b >= 0 && b <= 20) root.windowBorder = Math.round(b)
+    stdout: SplitParser {
+      splitMarker: ""
+      onRead: function(chunk) {
+        if (!Policy.collectChunk(borderProc.collector, chunk)) borderProc.running = false
       }
+    }
+    onExited: function(code) {
+      var c = borderProc.collector
+      borderProc.collector = Policy.newCollector(4096)
+      if (code !== 0 || c.overflowed) return
+      var o = null
+      try { o = JSON.parse(c.buf) } catch (e) { o = null }
+      var b = o ? Number(o.int !== undefined ? o.int : o.value) : NaN
+      if (isFinite(b) && b >= 0 && b <= 20) root.windowBorder = Math.round(b)
     }
   }
   Connections {
@@ -510,6 +586,7 @@ Item {
     function onRawEvent(event) {
       var name = String(event.name)
       if (name === "configreloaded") root.readBorder()
+      if (!root.showing) return
       switch (name) {
       case "closewindow":
         root.windowClosed(String(event.data).split(",")[0])
@@ -568,13 +645,17 @@ Item {
     id: cursorSocket
     path: root.hyprSocket
     property string buf: ""
+    property bool abortedByPoll: false
     onConnectedChanged: {
       if (!connected) {
-        // Hyprland closed its end: whatever came is all there is.
-        if (buf !== "") root.takeCursorReply(buf, true)
+        // Hyprland closed its end: whatever came is all there is, unless
+        // the poll timer cancelled a slow read before reconnecting.
+        if (!abortedByPoll && buf !== "") root.takeCursorReply(buf, true)
+        abortedByPoll = false
         buf = ""
         return
       }
+      abortedByPoll = false
       buf = ""
       write(root.cursorBatch ? Policy.CURSOR_BATCH : "cursorpos")
       flush()
@@ -584,7 +665,14 @@ Item {
       // more than one chunk, so the chunks are gathered until it reads whole.
       splitMarker: ""
       onRead: function(chunk) {
-        cursorSocket.buf += String(chunk)
+        var s = String(chunk)
+        if (cursorSocket.buf.length + s.length > 65536) {
+          cursorSocket.abortedByPoll = true
+          cursorSocket.buf = ""
+          cursorSocket.connected = false
+          return
+        }
+        cursorSocket.buf += s
         // Hyprland closes its end once it has answered; closing ours first
         // keeps Quickshell from logging a PeerClosedError on every poll.
         if (root.takeCursorReply(cursorSocket.buf, false)) { cursorSocket.buf = ""; cursorSocket.connected = false }
@@ -620,7 +708,7 @@ Item {
     repeat: true
     interval: 33
     onTriggered: {
-      if (cursorSocket.connected) cursorSocket.connected = false
+      if (cursorSocket.connected) { cursorSocket.abortedByPoll = true; cursorSocket.connected = false }
       cursorSocket.connected = true
       interval = Date.now() - root.lastMotion < 2000 || Date.now() - root.lastSetOff < 300 ? root.fastPoll : 33
     }
@@ -650,7 +738,7 @@ Item {
   property bool anchorBusy: false
   // Send a batch of `n` requests; done(replyText or null) when answered.
   function anchorSend(text, n, done) {
-    if (!text || root.hyprSocket === "") { if (done) done(null); return }
+    if (!text || root.hyprSocket === "" || root.anchorQueue.length >= 64) { if (done) done(null); return }
     root.anchorQueue = root.anchorQueue.concat([{ text: text, n: n, done: done }])
     if (!root.anchorBusy) root.anchorNext()
   }
@@ -686,10 +774,16 @@ Item {
     parser: SplitParser {
       splitMarker: ""
       onRead: function(chunk) {
-        anchorSocket.buf += String(chunk)
+        var s = String(chunk)
+        if (anchorSocket.buf.length + s.length > 65536) {
+          anchorSocket.buf = ""
+          anchorSocket.connected = false
+          return
+        }
+        anchorSocket.buf += s
         // Every answer in: close our end first (as the pointer feed does).
         var job = anchorSocket.job
-        if (job && anchorSocket.buf.split("\n\n\n").length >= job.n && anchorSocket.buf.trim() !== "") anchorSocket.connected = false
+        if (job && Policy.anchorBatchComplete(anchorSocket.buf, job.n)) anchorSocket.connected = false
       }
     }
   }
@@ -819,13 +913,20 @@ Item {
   Process {
     id: identityProc
     property string name: ""
+    property var collector: Policy.newCollector(256)
     command: ["sh", "-c", "od -An -tx1 -N16 /dev/urandom | tr -d ' \\n'"]
-    stdout: StdioCollector {
-      onStreamFinished: {
-        var id = String(text || "").trim()
-        if (!/^[a-f0-9]{32}$/.test(id)) { root.notify("Couldn't set up friends", "No randomness from /dev/urandom."); return }
-        root.update(function(s) { s.identity = { id: id, name: identityProc.name } })
+    stdout: SplitParser {
+      splitMarker: ""
+      onRead: function(chunk) {
+        if (!Policy.collectChunk(identityProc.collector, chunk)) identityProc.running = false
       }
+    }
+    onExited: function(code) {
+      var c = identityProc.collector
+      identityProc.collector = Policy.newCollector(256)
+      var id = code === 0 && !c.overflowed ? c.buf.trim() : ""
+      if (!/^[a-f0-9]{32}$/.test(id)) { root.notify("Couldn't set up friends", "No randomness from /dev/urandom."); return }
+      root.update(function(s) { s.identity = { id: id, name: identityProc.name } })
     }
   }
 
@@ -834,6 +935,8 @@ Item {
       if (name) update(function(s) { s.identity.name = String(name).slice(0, 40) })
       return
     }
+    if (identityProc.running) return
+    identityProc.collector = Policy.newCollector(256)
     identityProc.name = String(name || Quickshell.env("USER") || "Me").slice(0, 40)
     identityProc.running = true
   }
@@ -849,6 +952,11 @@ Item {
     var f = Store.parseFriendCode(code)
     if (!f) { notify("That isn't a Flurry friend code", "It looks like flurry1:name:…"); return false }
     if (root.saved.identity && f.id === root.saved.identity.id) { notify("That's your own code", ""); return false }
+    var exists = !!friendById(f.id)
+    if (!exists && root.saved.friends.length >= Store.MAX_FRIENDS) {
+      notify("Friend list is full", "Remove a friend before adding another.")
+      return false
+    }
     update(function(s) {
       s.friends = s.friends.filter(function(x) { return x.id !== f.id })
       s.friends.push(f)
@@ -859,30 +967,55 @@ Item {
 
   Process {
     id: pasteProc
+    property var collector: Policy.newCollector(Store.MAX_FRIEND_CODE_BYTES)
     command: ["wl-paste", "--no-newline"]
-    stdout: StdioCollector { onStreamFinished: root.addFriend(String(text || "")) }
+    stdout: SplitParser {
+      splitMarker: ""
+      onRead: function(chunk) {
+        if (!Policy.collectChunk(pasteProc.collector, chunk)) pasteProc.running = false
+      }
+    }
+    onExited: function(code) {
+      var c = pasteProc.collector
+      pasteProc.collector = Policy.newCollector(Store.MAX_FRIEND_CODE_BYTES)
+      if (c.overflowed) { root.notify("That isn't a Flurry friend code", "Clipboard content is too large."); return }
+      if (code !== 0) { root.notify("Clipboard is empty", "Copy a friend code first."); return }
+      root.addFriend(c.buf)
+    }
   }
-  function addFriendFromClipboard() { pasteProc.running = true }
+  function addFriendFromClipboard() {
+    if (pasteProc.running) return
+    pasteProc.collector = Policy.newCollector(Store.MAX_FRIEND_CODE_BYTES)
+    pasteProc.running = true
+  }
 
   function removeFriend(id) { update(function(s) { s.friends = s.friends.filter(function(x) { return x.id !== id }) }) }
 
   // Outgoing gifts queue up and go one at a time.
   property var outbox: []
   function post(friendId, message) {
+    if (root.outbox.length >= Store.MAX_OUTBOX) return false
     root.outbox = root.outbox.concat([{ topic: Store.topicFor(friendId), body: JSON.stringify(message) }])
     if (!sendProc.running) sendNext()
+    return true
   }
   function sendNext() {
     if (!root.outbox.length) return
     var next = root.outbox[0]
     root.outbox = root.outbox.slice(1)
-    sendProc.command = ["curl", "-sS", "-f", "-m", "20", "-H", "Content-Type: application/json",
-                        "-H", "Cache: yes", "--data-binary", next.body, root.saved.server + "/" + next.topic]
+    sendProc.environment = { FLURRY_URL: root.saved.server + "/" + next.topic, FLURRY_BODY: next.body }
+    sendProc.command = ["bash", "-c",
+      "exec curl -sS -f -m 20 --connect-timeout 10 --proto =https --proto-redir =https --max-redirs 0 "
+      + "-H 'Content-Type: application/json' -H 'Cache: yes' "
+      + "--config <(printf 'url = \"%s\"\\n' \"$FLURRY_URL\") --data-binary @<(printf '%s' \"$FLURRY_BODY\")"]
     sendProc.running = true
   }
   Process {
     id: sendProc
+    stdout: SplitParser { splitMarker: ""; onRead: function() {} }
+    stderr: SplitParser { splitMarker: ""; onRead: function() {} }
     onExited: function(code) {
+      sendProc.environment = ({})
       if (code !== 0) root.notify("A gift didn't go out", "The train couldn't reach " + root.saved.server + ".")
       root.sendNext()
     }
@@ -894,15 +1027,21 @@ Item {
   }
 
   // Send what is on the desktop: the train comes for it and it leaves.
+  property var pendingSends: ({})
   function sendItem(kind, id, friendId) {
     var friend = friendById(friendId)
     if (!friend || !root.saved.identity) return false
+    var key = kind + ":" + id
+    if (root.pendingSends[key]) return false
     var item = find(kind, id)
     if (!item) return false
     var payload = kind === "tree" ? { star: item.star, size: item.size, ornaments: item.ornaments }
                                   : { scarf: item.themeScarf && root.theme ? root.theme.scarf : item.scarf, size: item.size, outfit: item.outfit }
     var scene = sceneForPlace(item.place)
+    root.pendingSends[key] = true
     var go = function() {
+      delete root.pendingSends[key]
+      if (!root.find(kind, id)) return
       root.post(friend.id, Store.giftMessage(root.saved.identity, kind, payload))
       root.removeItem(kind, id)
       root.notify("On its way to " + friend.name, "")
@@ -916,7 +1055,7 @@ Item {
     var friend = friendById(friendId)
     var text = String(note || "").trim()
     if (!friend || !root.saved.identity || !text) return false
-    root.post(friend.id, Store.giftMessage(root.saved.identity, "note", { note: text }))
+    if (!root.post(friend.id, Store.giftMessage(root.saved.identity, "note", { note: text }))) return false
     var scene = focusedScene()
     if (scene) scene.trainDepart("note")
     notify("Note sent to " + friend.name, "")
@@ -927,28 +1066,67 @@ Item {
   // last message seen so nothing sent while the shell was down is lost
   // (ntfy keeps messages for a while).
   readonly property bool inboxWanted: root.loaded && !!root.saved.identity
+  readonly property string inboxTarget: inboxWanted ? (root.saved.server + "/" + Store.topicFor(root.saved.identity.id)) : ""
   property int inboxBackoff: 5
+  property real giftWindowStart: 0
+  property int giftWindowCount: 0
+
+  function receiveGiftAllowed(gift) {
+    if (gift.kind === "snowball") return true
+    var now = Date.now()
+    if (now - root.giftWindowStart > 10000) {
+      root.giftWindowStart = now
+      root.giftWindowCount = 0
+    }
+    if (root.giftWindowCount >= 5) return false
+    root.giftWindowCount++
+    return true
+  }
+
+  function handleInboxLine(line) {
+    var ev = Store.classifyInboxEvent(line, root.saved.friends)
+    if (!ev) return
+    root.inboxBackoff = 5
+    if (ev.type !== "gift") return
+    if (ev.gift.kind === "snowball") {
+      root.receive(ev.gift)
+      if (ev.id) root.update(function(s) { s.inboxSince = ev.id })
+      return
+    }
+    if (ev.id) ev.gift.inboxId = ev.id
+    if (root.receiveGiftAllowed(ev.gift)) root.receive(ev.gift)
+    else if (ev.id) root.update(function(s) { s.inboxSince = ev.id })
+  }
+
+  function startInbox() {
+    if (!root.inboxWanted || inboxProc.running) return
+    var url = root.inboxTarget + "/json?since=" + root.saved.inboxSince
+    inboxProc.stream = Policy.newLineStream(Store.MAX_INBOX_LINE)
+    inboxProc.environment = { FLURRY_URL: url }
+    inboxProc.command = ["sh", "-c",
+      "exec curl -sS -f -N --no-buffer --connect-timeout 10 --limit-rate 64K "
+      + "--proto =https --proto-redir =https --max-redirs 0 --speed-limit 1 --speed-time 180 --config - <<EOF\nurl = \"$FLURRY_URL\"\nEOF"]
+    inboxProc.running = true
+  }
 
   Process {
     id: inboxProc
     running: false
-    command: root.saved.identity
-      // ntfy sends a keepalive every 45 s or so; a stream silent for three
-      // minutes (a dead connection after suspend or a network change) is
-      // dropped and reopened instead of hanging there for the session.
-      ? ["curl", "-sS", "-N", "--no-buffer", "--speed-limit", "1", "--speed-time", "180", root.saved.server + "/" + Store.topicFor(root.saved.identity.id)
-         + "/json?since=" + root.saved.inboxSince]
-      : ["true"]
+    property var stream: Policy.newLineStream(Store.MAX_INBOX_LINE)
     stdout: SplitParser {
-      onRead: function(line) {
-        root.inboxBackoff = 5
-        var got = Store.parseInbox(line, root.saved.friends)
-        if (!got) return
-        root.receive(got.gift)
-        if (got.id) root.update(function(s) { s.inboxSince = got.id })
+      splitMarker: ""
+      onRead: function(chunk) {
+        if (!Policy.pushLineChunk(inboxProc.stream, chunk, root.handleInboxLine)) {
+          console.warn("flurry: ntfy stream line exceeded " + Store.MAX_INBOX_LINE + " bytes; reconnecting")
+          inboxProc.running = false
+        }
       }
     }
-    onExited: if (root.inboxWanted) inboxRetry.restart()
+    stderr: SplitParser { splitMarker: ""; onRead: function() {} }
+    onExited: {
+      inboxProc.environment = ({})
+      if (root.inboxWanted) inboxRetry.restart()
+    }
   }
 
   Timer {
@@ -956,41 +1134,46 @@ Item {
     interval: root.inboxBackoff * 1000
     onTriggered: {
       root.inboxBackoff = Math.min(120, root.inboxBackoff * 2)
-      if (root.inboxWanted) inboxProc.running = true
+      root.startInbox()
     }
   }
 
   onInboxWantedChanged: {
-    if (inboxWanted) inboxProc.running = true
-    else inboxProc.running = false
+    if (inboxWanted) root.startInbox()
+    else { inboxRetry.stop(); inboxProc.running = false }
+  }
+  onInboxTargetChanged: {
+    if (!inboxWanted) return
+    if (inboxProc.running) inboxProc.running = false
+    else if (!inboxRetry.running) root.startInbox()
   }
 
   function receive(gift) {
     if (gift.kind === "snowball") { catchSnowball(gift); return }
     var scene = focusedScene()
-    var who = gift.from + (gift.known ? "" : " (not in your friends)")
     if (scene) scene.trainDeliver(gift)
     else deliverAt(gift, { screen: "", fx: 0.5, fy: 1 })
-    notify(gift.kind === "note" ? "A note from " + who : "A gift from " + who,
-           gift.note || "The little train just dropped it off.")
   }
 
   // Called by the scene once the train has stopped, with where it stopped.
   function deliverAt(gift, place) {
+    var who = gift.from + (gift.known ? "" : " (not in your friends)")
     if (gift.kind === "snowman" && root.saved.snowmen.length < Store.MAX_SNOWMEN) {
       addSnowman(place, { scarf: gift.art.scarf, size: gift.art.size, from: gift.from, outfit: gift.art.outfit || { nose: true, scarf: true, hat: true } })
+      if (gift.note) addGift(Object.assign({}, place, { fx: Math.min(0.97, (place.fx || 0.5) + 0.05) }),
+                             { kind: "note", from: gift.from, note: gift.note })
     } else if (gift.kind === "tree" && root.saved.trees.length < Store.MAX_TREES) {
       var t = Store.normalizeTree({ place: place, star: gift.art.star, size: gift.art.size,
-                                    ornaments: gift.art.ornaments, planted: 0 })
+                                    ornaments: gift.art.ornaments, planted: Date.now() })
       update(function(s) { s.trees.push(t) })
+      if (gift.note) addGift(Object.assign({}, place, { fx: Math.min(0.97, (place.fx || 0.5) + 0.05) }),
+                             { kind: "note", from: gift.from, note: gift.note })
     } else {
       addGift(place, { kind: gift.kind === "note" ? "note" : "gift", from: gift.from, note: gift.note })
-      return
     }
-    // A note that came with a snowman or a tree is left beside it as a
-    // letter, so it can still be read once the notification is gone.
-    if (gift.note) addGift(Object.assign({}, place, { fx: Math.min(0.97, (place.fx || 0.5) + 0.05) }),
-                           { kind: "note", from: gift.from, note: gift.note })
+    if (gift.inboxId) root.update(function(s) { s.inboxSince = gift.inboxId })
+    notify(gift.kind === "note" ? "A note from " + who : "A gift from " + who,
+           gift.note || "The little train just dropped it off.")
   }
 
   // ---------------------------------------------------------- the environment
@@ -1058,16 +1241,21 @@ Item {
 
   property int weatherFailures: 0
   property string missingCity: ""          // a city the geocoder didn't know: don't ask again
+  property string weatherStatus: ""        // "", "loading", "ok", "not_found", "error"
   readonly property bool weatherWanted: root.active && root.saved.liveWeather
   readonly property bool weatherPlaced: root.saved.weatherLat !== null && root.saved.weatherLon !== null
 
   function setWeatherCity(name) {
     var city = String(name || "").trim()
+    root.missingCity = ""
+    root.weatherStatus = city ? "loading" : ""
     update(function(s) { s.weatherCity = city; s.weatherLat = null; s.weatherLon = null; s.weatherPlace = ""; s.liveWeather = city !== "" || s.liveWeather })
     weatherSoon.restart()
   }
   function setWeatherLocation(lat, lon) {
     if (!Weather.validLat(lat) || !Weather.validLon(lon)) return false
+    root.missingCity = ""
+    root.weatherStatus = "loading"
     update(function(s) { s.weatherLat = Number(lat); s.weatherLon = Number(lon); s.weatherCity = ""; s.weatherPlace = Number(lat).toFixed(2) + ", " + Number(lon).toFixed(2); s.liveWeather = true })
     weatherSoon.restart()
     return true
@@ -1075,56 +1263,102 @@ Item {
   function weatherCommand(mode) {
     mode = String(mode || "")
     if (mode === "on" || mode === "off") { setFlag("liveWeather", mode === "on"); return mode }
-    if (mode === "now" || mode === "refresh") { weatherSoon.restart(); return "fetching" }
+    if (mode === "now" || mode === "refresh") {
+      if (!root.saved.liveWeather) return "live weather is off (flurry weather on)"
+      weatherSoon.restart()
+      return "fetching"
+    }
     var c = root.saved.weatherCache
     return JSON.stringify({ live: root.saved.liveWeather, place: root.saved.weatherPlace || root.saved.weatherCity,
                             reading: c ? c.current : null, at: c ? new Date(c.at).toISOString() : null, mapped: root.weatherNow })
+  }
+  function weatherCurlArgs(url) {
+    return ["curl", "-sS", "-f", "-m", "15", "--connect-timeout", "10",
+            "--max-filesize", String(Weather.MAX_RESPONSE_BYTES),
+            "--proto", "=https", "--proto-redir", "=https", "--max-redirs", "0", "--", url]
   }
   function fetchWeather() {
     if (!root.weatherWanted || geoProc.running || weatherProc.running) return
     if (!root.weatherPlaced) {
       if (!root.saved.weatherCity || root.saved.weatherCity === root.missingCity) return
-      geoProc.command = ["curl", "-sS", "-f", "-m", "15", Weather.geocodeUrl(root.saved.weatherCity)]
+      var gurl = Weather.geocodeUrl(root.saved.weatherCity)
+      if (!gurl) return
+      root.weatherStatus = "loading"
+      geoProc.collector = Policy.newCollector(Weather.MAX_RESPONSE_BYTES)
+      geoProc.command = weatherCurlArgs(gurl)
       geoProc.running = true
       return
     }
-    weatherProc.command = ["curl", "-sS", "-f", "-m", "15", Weather.forecastUrl(root.saved.weatherLat, root.saved.weatherLon)]
+    var furl = Weather.forecastUrl(root.saved.weatherLat, root.saved.weatherLon)
+    if (!furl) return
+    root.weatherStatus = "loading"
+    weatherProc.collector = Policy.newCollector(Weather.MAX_RESPONSE_BYTES)
+    weatherProc.command = weatherCurlArgs(furl)
     weatherProc.running = true
   }
   function weatherFailed() {
     root.weatherFailures++
+    root.weatherStatus = "error"
     weatherTimer.interval = Weather.retryDelay(root.weatherFailures)
-    weatherTimer.restart()
+    if (root.weatherWanted) weatherTimer.restart()
   }
   Process {
     id: geoProc
-    stdout: StdioCollector {
-      onStreamFinished: {
-        var g = Weather.parseGeocode(String(text || ""))
-        if (!g) {
-          if (String(text || "").indexOf("results") < 0 && String(text || "").length > 0) return root.weatherFailed()
-          root.missingCity = root.saved.weatherCity
-          root.notify("Couldn't find " + root.saved.weatherCity, "Try a bigger city nearby, or `flurry location <lat> <lon>`.")
-          return
+    property var collector: Policy.newCollector(Weather.MAX_RESPONSE_BYTES)
+    stdout: SplitParser {
+      splitMarker: ""
+      onRead: function(chunk) {
+        if (!Policy.collectChunk(geoProc.collector, chunk)) {
+          console.warn("flurry: Open-Meteo geocode response exceeded " + Weather.MAX_RESPONSE_BYTES + " bytes; aborting")
+          geoProc.running = false
         }
-        root.update(function(s) { s.weatherLat = g.lat; s.weatherLon = g.lon; s.weatherPlace = g.name })
-        weatherSoon.restart()
       }
     }
-    onExited: function(code) { if (code !== 0) root.weatherFailed() }
+    stderr: SplitParser { splitMarker: ""; onRead: function() {} }
+    onExited: function(code) {
+      var c = geoProc.collector
+      geoProc.collector = Policy.newCollector(Weather.MAX_RESPONSE_BYTES)
+      if (code !== 0 || c.overflowed) { root.weatherFailed(); return }
+      var res = Weather.parseGeocodeStatus(c.buf)
+      if (res.status === "error") { root.weatherFailed(); return }
+      if (res.status === "not_found") {
+        root.missingCity = root.saved.weatherCity
+        root.weatherStatus = "not_found"
+        root.notify("Couldn't find " + root.saved.weatherCity, "Try a bigger city nearby, or `flurry location <lat> <lon>`.")
+        return
+      }
+      var g = res.location
+      root.weatherFailures = 0
+      root.weatherStatus = "ok"
+      root.update(function(s) { s.weatherLat = g.lat; s.weatherLon = g.lon; s.weatherPlace = g.name })
+      weatherSoon.restart()
+    }
   }
   Process {
     id: weatherProc
-    stdout: StdioCollector {
-      onStreamFinished: {
-        var cur = Weather.parseCurrent(String(text || ""))
-        if (!cur) return
-        root.weatherFailures = 0
-        weatherTimer.interval = Weather.REFRESH_MS
-        root.update(function(s) { s.weatherCache = { at: Date.now(), current: cur } })
+    property var collector: Policy.newCollector(Weather.MAX_RESPONSE_BYTES)
+    stdout: SplitParser {
+      splitMarker: ""
+      onRead: function(chunk) {
+        if (!Policy.collectChunk(weatherProc.collector, chunk)) {
+          console.warn("flurry: Open-Meteo forecast response exceeded " + Weather.MAX_RESPONSE_BYTES + " bytes; aborting")
+          weatherProc.running = false
+        }
       }
     }
-    onExited: function(code) { if (code !== 0) root.weatherFailed() }
+    stderr: SplitParser { splitMarker: ""; onRead: function() {} }
+    onExited: function(code) {
+      var c = weatherProc.collector
+      weatherProc.collector = Policy.newCollector(Weather.MAX_RESPONSE_BYTES)
+      if (code !== 0 || c.overflowed) { root.weatherFailed(); return }
+      var cur = Weather.parseCurrent(c.buf)
+      if (!cur) { root.weatherFailed(); return }
+      root.weatherFailures = 0
+      root.weatherStatus = "ok"
+      weatherTimer.interval = Weather.REFRESH_MS
+      if (root.weatherWanted) weatherTimer.restart()
+      root.update(function(s) { s.weatherCache = { at: Date.now(), current: cur } })
+    }
   }
   Timer {
     id: weatherTimer
@@ -1174,17 +1408,28 @@ Item {
   // where it found a battery (a desktop is read once and left alone).
   Process {
     id: powerProc
+    property var collector: Policy.newCollector(16384)
     command: ["sh", "-c", "for d in /sys/class/power_supply/*; do [ -e \"$d/type\" ] || continue; "
-                        + "printf '%s|%s|%s|%s|%s\\n' \"${d##*/}\" \"$(cat $d/type 2>/dev/null)\" \"$(cat $d/status 2>/dev/null)\" "
-                        + "\"$(cat $d/capacity 2>/dev/null)\" \"$(cat $d/online 2>/dev/null)\"; done"]
-    stdout: StdioCollector { onStreamFinished: root.sysPower = Policy.parsePowerSupply(String(text || "")) }
+                        + "printf '%s|%s|%s|%s|%s\\n' \"${d##*/}\" \"$(cat \"$d/type\" 2>/dev/null)\" \"$(cat \"$d/status\" 2>/dev/null)\" "
+                        + "\"$(cat \"$d/capacity\" 2>/dev/null)\" \"$(cat \"$d/online\" 2>/dev/null)\"; done"]
+    stdout: SplitParser {
+      splitMarker: ""
+      onRead: function(chunk) {
+        if (!Policy.collectChunk(powerProc.collector, chunk)) powerProc.running = false
+      }
+    }
+    onExited: function(code) {
+      var c = powerProc.collector
+      powerProc.collector = Policy.newCollector(16384)
+      if (code === 0 && !c.overflowed) root.sysPower = Policy.parsePowerSupply(c.buf)
+    }
   }
   Timer {
     interval: 60000
     repeat: true
     running: root.active && !root.upowerBattery && (!root.sysPower.known || root.sysPower.battery)
     triggeredOnStart: true
-    onTriggered: if (!powerProc.running) powerProc.running = true
+    onTriggered: if (!powerProc.running) { powerProc.collector = Policy.newCollector(16384); powerProc.running = true }
   }
 
   // ---------------------------------------------------------- calm
@@ -1218,8 +1463,9 @@ Item {
   property int lastTick: -1
   function previewFireworks(seconds) {
     if (!root.active) return false
-    for (var k in root.scenes) root.scenes[k].startFireworks(seconds)
-    return true
+    var any = false
+    for (var k in root.scenes) if (root.scenes[k].startFireworks(seconds)) any = true
+    return any
   }
   Timer {
     id: newYearTimer
@@ -1434,7 +1680,7 @@ Item {
   Timer {
     interval: 400
     repeat: true
-    running: root.showing
+    running: root.showing && root.saved.sound
     triggeredOnStart: true
     onTriggered: {
       var live = false, wet = 0
@@ -1481,6 +1727,7 @@ Item {
   // twice running), each started BED_OVERLAP seconds before the last ends.
   Process {
     id: cliBedPlayer
+    property bool pendingRestart: false
     command: ["sh", "-c",
       "dir=$1; vol=$2; pvol=$3; len=$4; shift 4; TAKES=$*; last=; kids=; "
       + "trap 'kill $kids $s 2>/dev/null; exit 0' TERM INT; "
@@ -1494,10 +1741,22 @@ Item {
       "flurry-bed", root.soundDir.replace(/\/$/, ""), root.cliBedVolume.toFixed(2), String(Math.round(root.cliBedVolume * 65536)),
       String(Snd.BED_SECONDS - Snd.BED_OVERLAP)].concat(Snd.bedTakes(root.cliBed))
     running: false
+    onExited: {
+      if (cliBedPlayer.pendingRestart) {
+        cliBedPlayer.pendingRestart = false
+        if (root.cliBed !== "" && root.cliBedVolume > 0) cliBedPlayer.running = true
+      }
+    }
   }
   function restartCliBed() {
-    cliBedPlayer.running = false
-    if (root.cliBed !== "" && root.cliBedVolume > 0) cliBedPlayer.running = true
+    var want = root.cliBed !== "" && root.cliBedVolume > 0
+    if (cliBedPlayer.running) {
+      cliBedPlayer.pendingRestart = want
+      cliBedPlayer.running = false
+    } else if (want) {
+      cliBedPlayer.pendingRestart = false
+      cliBedPlayer.running = true
+    }
   }
   onCliBedChanged: restartCliBed()
   onCliBedVolumeChanged: if (root.cliBed !== "") cliBedTweak.restart()
@@ -1511,6 +1770,7 @@ Item {
   function playSound(name, volume) {
     if (root.qtSound) { soundLoader.item.play({ name: name, volume: volume }); return }
     var vol = Math.max(0, Math.min(1, volume * root.soundVolume))
+    if (vol <= 0) return
     Quickshell.execDetached(["sh", "-c",
       "if command -v pw-play >/dev/null 2>&1; then exec pw-play --volume=\"$2\" \"$1\"; "
       + "elif command -v paplay >/dev/null 2>&1; then exec paplay --volume=\"$3\" \"$1\"; fi",
@@ -1594,7 +1854,11 @@ Item {
     }
     function status(): string { return root.status() }
     function shake(): string { return root.shakeAll() ? "whoosh" : "off" }
-    function fireworks(seconds: string): string { return root.previewFireworks(Number(seconds) || 60) ? "bang" : "off" }
+    function fireworks(seconds: string): string {
+      var n = seconds === "" ? 60 : Number(seconds)
+      if (!isFinite(n) || n <= 0) return "fireworks: seconds must be positive"
+      return root.previewFireworks(n) ? "bang" : "off"
+    }
     function season(name: string): string { return root.previewSeason(name) }
     function weather(mode: string): string { return root.weatherCommand(mode) }
     function city(name: string): string { root.setWeatherCity(name); return "looking up " + name }

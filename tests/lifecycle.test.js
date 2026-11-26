@@ -117,28 +117,33 @@ test("a jump with no pointer behind it (a snap, a layout change) moves the snow 
 })
 
 test("a smooth drag: the snow rides along; nothing bursts, no sheets, speeds stay plausible", () => {
-  // A ledge as deep as 60 s of snow built before windows caught it faster
-  // (TUNING.snow.windowCatch): a ledge filled to the cap sheds more, by design.
-  const w = scene(Math.round(60 / S.TUNING.snow.windowCatch))
-  S.setEnv(w, { snowScale: 0 }); w.particles = []
-  const had = ledge(w)
-  let most = 0, fastest = 0, x = 0, y = 0
-  // Eases out to ~1100 px/s and back, twice, sampled every frame.
-  for (let t = 0; t < 4; t += dt) {
-    const n = w.particles.length
-    x = 500 * Math.sin(t * Math.PI / 2) * Math.sin(t * Math.PI / 2) * (t < 2 ? 1 : -1)
-    y = 40 * Math.sin(t * Math.PI)
-    S.setSurfaces(w, [at(TERM, x, y)], w.time, [TERM.id])
-    S.step(w, dt)
-    most = Math.max(most, w.particles.length - n)
-    for (const p of w.particles) {
-      assert.ok(isFinite(p.x) && isFinite(p.y) && isFinite(p.vx) && isFinite(p.vy), "no NaN")
-      if (p.kind === "clump" || p.kind === "powder") fastest = Math.max(fastest, Math.hypot(p.vx, p.vy))
+  let seed = 101
+  const rnd = Math.random
+  Math.random = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296 }
+  try {
+    // A ledge as deep as 60 s of snow built before windows caught it faster
+    // (TUNING.snow.windowCatch): a ledge filled to the cap sheds more, by design.
+    const w = scene(Math.round(60 / S.TUNING.snow.windowCatch))
+    S.setEnv(w, { snowScale: 0 }); w.particles = []
+    const had = ledge(w)
+    let most = 0, fastest = 0, x = 0, y = 0
+    // Eases out to ~1100 px/s and back, twice, sampled every frame.
+    for (let t = 0; t < 4; t += dt) {
+      const n = w.particles.length
+      x = 500 * Math.sin(t * Math.PI / 2) * Math.sin(t * Math.PI / 2) * (t < 2 ? 1 : -1)
+      y = 40 * Math.sin(t * Math.PI)
+      S.setSurfaces(w, [at(TERM, x, y)], w.time, [TERM.id])
+      S.step(w, dt)
+      most = Math.max(most, w.particles.length - n)
+      for (const p of w.particles) {
+        assert.ok(isFinite(p.x) && isFinite(p.y) && isFinite(p.vx) && isFinite(p.vy), "no NaN")
+        if (p.kind === "clump" || p.kind === "powder") fastest = Math.max(fastest, Math.hypot(p.vx, p.vy))
+      }
     }
-  }
-  assert.ok(ledge(w) > had * 0.85, `most of it rode along: ${ledge(w)} of ${had}`)
-  assert.ok(most <= S.SNOW.shedBudget + 6, `at most ${most} new pieces in one frame`)
-  assert.ok(fastest < S.SNOW.shedMax + 300, `fastest piece ${fastest} px/s`)
+    assert.ok(ledge(w) > had * 0.85, `most of it rode along: ${ledge(w)} of ${had}`)
+    assert.ok(most <= S.SNOW.shedBudget + 6, `at most ${most} new pieces in one frame`)
+    assert.ok(fastest < S.SNOW.shedMax + 300, `fastest piece ${fastest} px/s`)
+  } finally { Math.random = rnd }
 })
 
 test("a slow drag sheds nothing more than standing still does", () => {

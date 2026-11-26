@@ -110,7 +110,16 @@ void CFlurryAnchorDeco::draw(PHLMONITOR pMonitor, float const& a) {
     const auto PWINDOW = m_window.lock();
     if (!PWINDOW->m_ruleApplicator->decorate().valueOrDefault())
         return;
-    if (!anchorFor(PWINDOW) || anchorsStale())
+    if (anchorsStale()) {
+        if (!g_anchors.empty())
+            g_anchors.clear();
+        if (m_extents.topLeft != Vector2D{} || m_extents.bottomRight != Vector2D{}) {
+            damageEntire();
+            m_extents = {};
+        }
+        return;
+    }
+    if (!anchorFor(PWINDOW))
         return;
 
     CFlurryAnchorPassElement::SData data;
@@ -138,7 +147,8 @@ void CFlurryAnchorDeco::drawPass(PHLMONITOR pMonitor, float const& a) {
             continue;
         // A new picture: load it here, where the GL context is current.
         if (s.seq != s.loadedSeq) {
-            s.loadedSeq      = s.seq;
+            s.loadedSeq = s.seq;
+            s.tex.reset();
             const auto CAIRO = cairo_image_surface_create_from_png(s.path.c_str());
             if (CAIRO && cairo_surface_status(CAIRO) == CAIRO_STATUS_SUCCESS)
                 s.tex = g_pHyprRenderer->createTexture(CAIRO);

@@ -106,19 +106,24 @@ for (const V of [1500, 3000]) {
 }
 
 test("a window shaken back and forth: the snow sloshes as a sheet, spills over the ends, and what stays is one smooth ledge again", () => {
-  const w = scene()
-  const ledge = onLedge(w), total = allSnow(w)
-  run(w, 3.4, t => t < 2 ? 160 * Math.sin(2 * Math.PI * 2.6 * t) : 0)
-  const s = w.surfaces[TERM.id]
-  assert.ok(!s.loose, "it grips again once the shaking stops")
-  assert.ok(onLedge(w) < ledge * 0.95, "some spilled over the ends: " + onLedge(w).toFixed(0))
-  assert.ok(!w.particles.some(p => p.hold), "no row of clumps riding the window")
-  // No comb: neighbouring cells differ gently.
-  let steep = 0
-  for (let i = 1; i < s.bins.length; i++) steep = Math.max(steep, Math.abs(s.bins[i] - s.bins[i - 1]))
-  assert.ok(steep < 3, "smooth ledge, steepest step " + steep.toFixed(2) + " px")
-  for (let t = 0; t < 3; t += dt) { S.setSurfaces(w, [TERM], w.time, [TERM.id], still(TERM)); S.step(w, dt) }
-  assert.ok(Math.abs(allSnow(w) - total) < total * 0.03, `mass kept: ${allSnow(w)} of ${total}`)
+  let seed = 42
+  const rnd = Math.random
+  Math.random = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296 }
+  try {
+    const w = scene()
+    const ledge = onLedge(w), total = allSnow(w)
+    run(w, 3.4, t => t < 2 ? 160 * Math.sin(2 * Math.PI * 2.6 * t) : 0)
+    const s = w.surfaces[TERM.id]
+    assert.ok(!s.loose, "it grips again once the shaking stops")
+    assert.ok(onLedge(w) < ledge * 0.95, "some spilled over the ends: " + onLedge(w).toFixed(0))
+    assert.ok(!w.particles.some(p => p.hold), "no row of clumps riding the window")
+    // No comb: neighbouring cells differ gently.
+    let steep = 0
+    for (let i = 1; i < s.bins.length; i++) steep = Math.max(steep, Math.abs(s.bins[i] - s.bins[i - 1]))
+    assert.ok(steep < 3, "smooth ledge, steepest step " + steep.toFixed(2) + " px")
+    for (let t = 0; t < 3; t += dt) { S.setSurfaces(w, [TERM], w.time, [TERM.id], still(TERM)); S.step(w, dt) }
+    assert.ok(Math.abs(allSnow(w) - total) < total * 0.03, `mass kept: ${allSnow(w)} of ${total}`)
+  } finally { Math.random = rnd }
 })
 
 test("a yank breaks the ledge into clumps of a few sizes and a little powder, and they tumble", () => {

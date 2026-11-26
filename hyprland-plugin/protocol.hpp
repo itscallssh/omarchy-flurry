@@ -13,6 +13,7 @@
 // w, h: its size; all in layout px. The path is the rest of the line.
 
 #include <charconv>
+#include <cmath>
 #include <cstdint>
 #include <string>
 #include <string_view>
@@ -56,11 +57,12 @@ namespace FlurryAnchor {
     inline bool parseNumber(std::string_view w, double& out) {
         if (w.empty())
             return false;
-        try {
-            size_t used = 0;
-            out         = std::stod(std::string(w), &used);
-            return used == w.size();
-        } catch (...) { return false; }
+        double v = 0;
+        auto [p, ec] = std::from_chars(w.data(), w.data() + w.size(), v);
+        if (ec != std::errc() || p != w.data() + w.size() || !std::isfinite(v))
+            return false;
+        out = v;
+        return true;
     }
 
     inline SCommand parse(std::string_view s) {

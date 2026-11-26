@@ -14,7 +14,7 @@ Item {
   // Set by Service.
   property string bed: ""          // the effect whose bed plays, "" for none
   property real bedLevel: 0        // 0..1, before the master volume
-  property real volume: 0.6        // master, 0..1
+  property real volume: 0.8        // master, 0..1
 
   readonly property url dir: Qt.resolvedUrl("sounds/")
   // Set when Qt Multimedia loads but can't play (no audio backend, a file
@@ -122,7 +122,7 @@ Item {
       required property string modelData
       property bool flip: false
       SoundEffect { id: va; source: root.dir + modelData + ".wav"; onStatusChanged: if (status === SoundEffect.Error) root.fail(String(source)) }
-      SoundEffect { id: vb; source: root.dir + modelData + ".wav" }
+      SoundEffect { id: vb; source: root.dir + modelData + ".wav"; onStatusChanged: if (status === SoundEffect.Error) root.fail(String(source)) }
       Component.onCompleted: { var v = root.voices; v[modelData] = voice; root.voices = v }
       function fire(vol) {
         var s = flip ? vb : va

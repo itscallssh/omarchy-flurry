@@ -90,7 +90,7 @@ test("the shell reads general:border_size once, again on configreloaded, and pas
 })
 
 test("a snowman on a drift settles across its base, not on the crest", () => {
-  const Sim = require(process.cwd() + "/tests/load")("lib/sim.js")
+  const Sim = require(path.join(__dirname, "load"))("lib/sim.js")
   const bins = []
   for (let i = 0; i < 60; i++) bins.push(i >= 28 && i <= 31 ? 14 : 2)   // one crest, hollows around it
   const world = { surfaces: { w: { x: 0, y: 500, bins: bins } } }

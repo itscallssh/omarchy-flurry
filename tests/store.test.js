@@ -30,10 +30,16 @@ test("friend codes round-trip and reject junk", () => {
 test("only https servers are accepted", () => {
   assert.strictEqual(S.normalize({ server: "http://evil" }).server, S.DEFAULT_SERVER)
   assert.strictEqual(S.normalize({ server: "https://ntfy.example.com/" }).server, "https://ntfy.example.com")
+  assert.strictEqual(S.normalize({ server: "https://ntfy.example.com:8443" }).server, "https://ntfy.example.com:8443")
   assert.strictEqual(S.normalize({ server: "https://x.com/$(rm -rf ~)" }).server, S.DEFAULT_SERVER)
+  for (const bad of [
+    "https://localhost", "https://sub.localhost", "https://127.0.0.1", "https://0.0.0.0",
+    "https://169.254.169.254", "https://x.com:0", "https://x.com:70000", "https://-bad",
+    "https://a..b", "https://" + "a".repeat(250) + ".com"
+  ]) assert.strictEqual(S.normalize({ server: bad }).server, S.DEFAULT_SERVER, bad)
 })
 
-test("inbox lines are validated", () => {
+test("inbox lines are validated and gift art is normalized at ingress", () => {
   const me = { id: "0123456789abcdef0123456789abcdef", name: "A" }
   const msg = S.giftMessage(me, "snowman", { scarf: "#2980b9", size: 1.2 })
   const line = JSON.stringify({ event: "message", id: "abc123", message: JSON.stringify(msg) })
@@ -42,11 +48,42 @@ test("inbox lines are validated", () => {
   assert.strictEqual(got.gift.from, "Ali")
   assert.strictEqual(got.gift.known, true)
   assert.strictEqual(S.parseInbox(JSON.stringify({ event: "keepalive" }), []), null)
+  assert.strictEqual(S.classifyInboxEvent(JSON.stringify({ event: "keepalive" }), []).type, "keepalive")
+  assert.strictEqual(S.classifyInboxEvent(JSON.stringify({ event: "open" }), []).type, "keepalive")
+  assert.strictEqual(S.classifyInboxEvent("<html>error</html>", []), null)
   assert.strictEqual(S.parseInbox("not json", []), null)
   const evil = JSON.stringify({ event: "message", id: "x", message: JSON.stringify(Object.assign({}, msg, { kind: "exec" })) })
   assert.strictEqual(S.parseInbox(evil, []), null)
   const huge = JSON.stringify({ event: "message", id: "x", message: "x".repeat(20000) })
   assert.strictEqual(S.parseInbox(huge, []), null)
+
+  // Hostile snowman/tree art fields are clamped and cleaned by parseInbox before delivery.
+  const badSnowman = JSON.stringify({
+    event: "message", id: "s1",
+    message: JSON.stringify({ v: 1, app: "flurry", kind: "snowman", from: { id: me.id, name: "A" }, art: { scarf: "javascript:1", size: 99, outfit: { hat: 1 } } })
+  })
+  const gs = S.parseInbox(badSnowman, [])
+  assert.strictEqual(gs.gift.art.size, 1.6)
+  assert.strictEqual(gs.gift.art.scarf, "#c0392b")
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(gs.gift.art.outfit)), { nose: false, scarf: false, hat: true })
+
+  const badTree = JSON.stringify({
+    event: "message", id: "t1",
+    message: JSON.stringify({ v: 1, app: "flurry", kind: "tree", from: { id: me.id, name: "A" }, art: { size: -4, ornaments: Array.from({ length: 100 }, () => ({ kind: "bomb", u: 9, color: "bad" })) } })
+  })
+  const gt = S.parseInbox(badTree, [])
+  assert.strictEqual(gt.gift.art.size, 0.6)
+  assert.strictEqual(gt.gift.art.ornaments.length, S.MAX_ORNAMENTS)
+  assert.strictEqual(gt.gift.art.ornaments[0].kind, "bauble")
+})
+
+test("normalize caps oversized friends, strings, and workHours.days", () => {
+  const manyFriends = Array.from({ length: 1000 }, (_, i) => ({ id: i.toString(16).padStart(32, "0"), name: "F" + i }))
+  const manyStrings = Array.from({ length: 1000 }, (_, i) => ({ windowClass: "win" + i, palette: "warm" }))
+  const s = S.normalize({ friends: manyFriends, strings: manyStrings, workHours: { start: "09:00", end: "17:00", days: Array.from({ length: 500 }, () => 1) } })
+  assert.strictEqual(s.friends.length, S.MAX_FRIENDS)
+  assert.strictEqual(s.strings.length, S.MAX_STRINGS)
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(s.workHours.days)), [1])
 })
 
 test("a received tree with junk ornaments is cleaned", () => {

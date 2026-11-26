@@ -23,6 +23,13 @@ A snowflake lands on the right of your bar. Click it, pick a weather, and get ba
 Requires Omarchy 4 (Quattro) or later. Gifts between friends also use `curl` and
 `wl-clipboard`, which Omarchy ships.
 
+Optional: for compositor-anchored window snow/frost/icicles with zero drag lag (see [`hyprland-plugin/`](hyprland-plugin/README.md)):
+
+```bash
+hyprpm add https://github.com/itscallssh/omarchy-flurry
+hyprpm enable flurry-anchor
+```
+
 ### Removing
 
 ```bash
@@ -409,7 +416,7 @@ This is opt-in. Pick a friend with `flurry throwto <friend>` and turn it on with
 #### How the snow treats your windows
 - Falling snow is drawn behind windows and only settles on their top edges. It never covers what's inside a window.
 - A window's ledge snow, icicles, lights, snowmen, perched birds and resting snowballs are tied to that window's Hyprland address. When the window closes or leaves the workspace or monitor, they're released straight away: the ledge falls as loose snow and nothing is left floating.
-- `hyprctl -j clients` decides which windows exist. Flurry checks it every 2 s and after every window event, and ignores any reply that arrived before a window closed.
+- `hyprctl -j clients` decides which windows exist. Flurry checks it every 30 s and after every window event, and ignores any reply that arrived before a window closed.
 - A gentle drag carries the snow. What holds it on is friction plus the bond packed snow forms with the window (together 1.6 g for fresh powder up to 2.6 g for settled snow). A drag that speeds up more gently than that keeps its ledge. Only a long, fast run blows some powder off, and only a sharp drop held for over 70 ms lifts the snow off.
 - Yank a window sideways and the snow stays where it was, like plates when a tablecloth is pulled out from under them. Flurry adds up how far the window's change in speed outruns what the snow's grip can pass on. Once that excess passes the speed at which kinetic friction (μk 0.2–0.3) would need more than 16 px to catch the snow up (about 115 px/s), the bond breaks. In practice that means going from rest to about 400–550 px/s within a tenth of a second (less for fresh powder, more for settled snow), or to 1500 px/s within a third of a second. The whole ledge comes loose in the next frame as clumps of a few sizes, each keeping its own place on screen. The window slides out from under them. A clump falls as soon as the window's edge has passed it, so the ledge drops right where it was, a column at a time. Kinetic friction only gives the snow a little of the window's speed (a couple of hundred px/s at most), so none of it is thrown. Pieces tumble, break in two and shed a little powder, and the snow's mass is kept. If the window stops while it is still under some of the snow, that snow settles back onto it. Icicles snap off where they hung, a perched bird takes off, and a snowman riding the window drops to the ground where it stood.
 - A window that moves with no pointer dragging it keeps its snow: the snow moves with it and nothing is read as a jolt. That covers a tiling relayout, a workspace switch, a keyboard move, and a window opening, closing, floating or going fullscreen. Hyprland reports no button state while you drag, so a drag is recognised by the pointer instead. It has to be moving, on the window or within a poll's travel of it, going the same way, and no layout event can have fired in the last 0.3 s. The first sample of a drag comes after the idle poll, so its speed is taken over the poll gap plus the 50 ms pointer poll. A long gap is therefore not mistaken for a huge speed, and a real yank is not mistaken for a jump. During an active drag, a big step counts as a yank even if the pointer reading lags.
@@ -471,7 +478,7 @@ Everything draws on one canvas per screen in batched paths. On battery the
 effect is halved and capped at 30 fps (turn that off in the menu), and it
 stops while a fullscreen app is up. Hyprland sends no events during an
 interactive window drag, so while the effect is on the window list is
-refreshed over Hyprland's socket every 220 ms, and every frame for two seconds
+refreshed over Hyprland's socket every 400 ms (200 ms when the pointer feed is off), and every frame for two seconds
 after something moves, so the physics sees a drag as smooth motion. The
 pointer is read for every effect but rain and starfall. The simulation costs
 about 0.25 ms a frame on a 2560×1440 screen with six windows at full snow

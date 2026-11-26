@@ -53,6 +53,8 @@ static std::string onCommand(eHyprCtlOutputFormat, std::string request) {
             const auto W = windowByAddress(CMD.address);
             if (!W)
                 return "flurry-anchor error: no such window";
+            if (!W->m_ruleApplicator->decorate().valueOrDefault())
+                return "flurry-anchor error: window undecorated";
             auto& strip     = g_anchors[CMD.address].strips[CMD.slot];
             strip.path      = CMD.path;
             strip.ox        = CMD.ox;

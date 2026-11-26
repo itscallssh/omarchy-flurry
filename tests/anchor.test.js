@@ -253,3 +253,36 @@ test("window tops fill about twice as fast as before; the ground keeps its pace"
   assert.ok(now.top > was.top * 1.8, `window top: ${now.top.toFixed(0)} now, ${was.top.toFixed(0)} before`)
   assert.ok(Math.abs(now.ground - was.ground) <= Math.max(5, was.ground * 0.15), `ground: ${now.ground.toFixed(0)} now, ${was.ground.toFixed(0)} before`)
 })
+
+test("batch completion waits for all n delimiter-terminated replies", () => {
+  assert.strictEqual(P.anchorBatchComplete("ok", 1), false)
+  assert.strictEqual(P.anchorBatchComplete("ok\n\n\n", 1), true)
+  assert.strictEqual(P.anchorBatchComplete("ok\n\n\n", 2), false)
+  assert.strictEqual(P.anchorBatchComplete("ok\n\n\nok\n\n\n", 2), true)
+})
+
+test("bounded collector and line stream reject oversized responses and unterminated lines immediately", () => {
+  const c = P.newCollector(10)
+  assert.strictEqual(P.collectChunk(c, "12345"), true)
+  assert.strictEqual(P.collectChunk(c, "67890"), true)
+  assert.strictEqual(c.buf, "1234567890")
+  assert.strictEqual(P.collectChunk(c, "!"), false)
+  assert.strictEqual(c.overflowed, true)
+  assert.strictEqual(c.buf, "")
+
+  // Multibyte UTF-8 counts by bytes, not UTF-16 code units.
+  const u = P.newCollector(5)
+  assert.strictEqual(P.collectChunk(u, "€€"), false)
+  assert.strictEqual(u.overflowed, true)
+
+  // Streaming line reader splits across chunks and trips before buffering an oversized unterminated line.
+  const ls = P.newLineStream(16)
+  const seen = []
+  assert.strictEqual(P.pushLineChunk(ls, "{\"a\":", l => seen.push(l)), true)
+  assert.strictEqual(P.pushLineChunk(ls, "1}\r\n{\"b\":2}\n", l => seen.push(l)), true)
+  assert.deepStrictEqual(seen, ["{\"a\":1}", "{\"b\":2}"])
+  assert.strictEqual(P.pushLineChunk(ls, "1234567890", l => seen.push(l)), true)
+  assert.strictEqual(P.pushLineChunk(ls, "1234567", l => seen.push(l)), false)
+  assert.strictEqual(ls.overflowed, true)
+  assert.strictEqual(ls.buf, "")
+})

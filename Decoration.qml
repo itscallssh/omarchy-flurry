@@ -76,7 +76,7 @@ Item {
     var seen = scene ? (scene.seenIds || {}) : {}
     var known = !!seen[item.id]
     if (scene) { var next = Object.assign({}, seen); next[item.id] = true; scene.seenIds = next }
-    return known || (scene ? scene.clock < 2 : true)
+    return known
   }
 
   NumberAnimation { id: grow; target: root; property: "growth"; from: 0; to: 1; duration: root.kind === "tree" ? 2400 : 1300; easing.type: Easing.OutCubic }
@@ -95,7 +95,7 @@ Item {
   readonly property bool glows: kind === "tree" && item && growth >= 1
                                 && (item.star || item.ornaments.some(function(o) { return o.kind === "light" }))
   onGlowsChanged: lights.requestPaint()
-  Timer { interval: 33; repeat: true; running: root.glows && root.visible; onTriggered: lights.requestPaint() }
+  Timer { interval: 33; repeat: true; running: root.glows && root.visible && !!root.scene && root.scene.visible && (root.scene.effectOn || root.scene.decorating); onTriggered: lights.requestPaint() }
 
   Canvas {
     id: canvas
@@ -157,6 +157,10 @@ Item {
       var fx = root.dragX + root.width / 2, fy = root.dragY + root.height
       root.scene.service.moveItem(root.kindKey(), root.item.id, root.scene.placeAt(root.kind, fx, fy))
       root.dragging = false
+    }
+    onCanceled: {
+      root.dragging = false
+      moved = false
     }
     onClicked: function(m) {
       if (moved) return

@@ -36,6 +36,10 @@ int main() {
     ok(parse("flurry set 0x1 left 0 0 1 1 /x.png").kind == SCommand::BAD, "bad slot");
     ok(parse("flurry set 0x1 top 0 0 -1 1 /x.png").kind == SCommand::BAD, "negative size");
     ok(parse("flurry set 0x1 top 0 0 1 1 relative.png").kind == SCommand::BAD, "relative path");
+    ok(parse("flurry set 0x1 top nan 0 1 1 /x.png").kind == SCommand::BAD, "nan rejected");
+    ok(parse("flurry set 0x1 top 0 0 inf 1 /x.png").kind == SCommand::BAD, "inf rejected");
+    ok(parse("flurry set 0x1 top 0 0 -inf 1 /x.png").kind == SCommand::BAD, "-inf rejected");
+    ok(parse("flurry set 0x1 top 1,5 0 1 1 /x.png").kind == SCommand::BAD, "comma decimal rejected");
     ok(parse("flurry set 0x1 top 0 0 1").kind == SCommand::BAD, "missing fields");
     ok(parse("flurry dance").kind == SCommand::BAD, "unknown verb");
     ok(parse("clients").kind == SCommand::BAD, "not ours");

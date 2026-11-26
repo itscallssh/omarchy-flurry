@@ -108,21 +108,26 @@ test("a hard stop throws the snow forward", () => {
 })
 
 test("a window dropped faster than gravity lifts its snow off over a moment, not in one frame", () => {
-  const { w, r } = snowyWindow()
-  const before = sum(w.surfaces.a.bins)
-  const dt = 1 / 60
-  let worst = 0, prev = before
-  for (let t = 0; t < 0.5; t += dt) {
-    S.setSurfaces(w, [Object.assign({}, r, { y: r.y + 0.5 * 5000 * t * t })], w.time)
-    S.step(w, dt)
-    const now = sum(w.surfaces.a.bins)
-    worst = Math.max(worst, (prev - now) / before)
-    prev = now
-  }
-  assert.ok(sum(w.surfaces.a.bins) < before * 0.5, `most of the snow lifted off: ${sum(w.surfaces.a.bins)} of ${before}`)
-  assert.ok(worst < 0.2, `a share at a time: worst frame took ${worst}`)
-  assert.ok(w.particles.some(p => p.kind === "clump"))
-  assert.ok(w.particles.every(p => Math.hypot(p.vx, p.vy) < 2200), "nothing flies off faster than the window could throw it")
+  let seed = 17
+  const rnd = Math.random
+  Math.random = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296 }
+  try {
+    const { w, r } = snowyWindow()
+    const before = sum(w.surfaces.a.bins)
+    const dt = 1 / 60
+    let worst = 0, prev = before
+    for (let t = 0; t < 0.5; t += dt) {
+      S.setSurfaces(w, [Object.assign({}, r, { y: r.y + 0.5 * 5000 * t * t })], w.time)
+      S.step(w, dt)
+      const now = sum(w.surfaces.a.bins)
+      worst = Math.max(worst, (prev - now) / before)
+      prev = now
+    }
+    assert.ok(sum(w.surfaces.a.bins) < before * 0.5, `most of the snow lifted off: ${sum(w.surfaces.a.bins)} of ${before}`)
+    assert.ok(worst < 0.2, `a share at a time: worst frame took ${worst}`)
+    assert.ok(w.particles.some(p => p.kind === "clump"))
+    assert.ok(w.particles.every(p => Math.hypot(p.vx, p.vy) < 2200), "nothing flies off faster than the window could throw it")
+  } finally { Math.random = rnd }
 })
 
 test("sliding conserves snow", () => {

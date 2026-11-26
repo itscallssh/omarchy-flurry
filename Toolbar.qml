@@ -9,15 +9,17 @@ Rectangle {
   property var scene: null
   readonly property var service: scene ? scene.service : null
 
+  function labelFor(id, fallback) { return service && service.tr ? service.tr(id) : fallback }
+
   readonly property var tools: [
-    { id: "tree", label: "Tree", glyph: "🎄" },
-    { id: "snowman", label: "Snowman", glyph: "⛄" },
-    { id: "bauble", label: "Bauble", glyph: "🔴" },
-    { id: "light", label: "Tree lights", glyph: "💡" },
-    { id: "string", label: "Window lights", glyph: "✨" },
-    { id: "candy", label: "Candy cane", glyph: "🍬" },
-    { id: "star", label: "Star", glyph: "⭐" },
-    { id: "erase", label: "Remove", glyph: "✕" }
+    { id: "tree", label: labelFor("toolbar.tree", "Tree"), glyph: "🎄" },
+    { id: "snowman", label: labelFor("toolbar.snowman", "Snowman"), glyph: "⛄" },
+    { id: "bauble", label: labelFor("toolbar.bauble", "Bauble"), glyph: "🔴" },
+    { id: "light", label: labelFor("toolbar.treeLights", "Tree lights"), glyph: "💡" },
+    { id: "string", label: labelFor("toolbar.windowLights", "Window lights"), glyph: "✨" },
+    { id: "candy", label: labelFor("toolbar.candy", "Candy cane"), glyph: "🍬" },
+    { id: "star", label: labelFor("toolbar.star", "Star"), glyph: "⭐" },
+    { id: "erase", label: labelFor("toolbar.erase", "Remove"), glyph: "✕" }
   ]
 
   width: row.implicitWidth + 20
@@ -47,10 +49,11 @@ Rectangle {
         Column {
           anchors.centerIn: parent
           spacing: 2
-          Text { anchors.horizontalCenter: parent.horizontalCenter; text: modelData.glyph; font.pixelSize: 18 }
+          Text { anchors.horizontalCenter: parent.horizontalCenter; textFormat: Text.PlainText; text: modelData.glyph; font.pixelSize: 18 }
           Text {
             id: label
             anchors.horizontalCenter: parent.horizontalCenter
+            textFormat: Text.PlainText
             text: modelData.id === "tree" ? modelData.label + " " + (root.service ? root.service.saved.trees.length : 0) + "/3" : modelData.label
             color: Commons.Color.popups.text
             font.family: Style.font.family
@@ -73,7 +76,8 @@ Rectangle {
       color: Commons.Color.accent
       Text {
         anchors.centerIn: parent
-        text: "Done"
+        textFormat: Text.PlainText
+        text: root.labelFor("toolbar.done", "Done")
         color: Commons.Color.background
         font.family: Style.font.family
         font.pixelSize: Style.font.body

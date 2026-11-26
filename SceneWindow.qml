@@ -83,6 +83,10 @@ PanelWindow {
     syncFullscreen()
     world = freshWorld()
     if (service) {
+      var initial = {}
+      var list = service.saved.snowmen || []
+      for (var i = 0; i < list.length; i++) initial[list[i].id] = true
+      seenIds = initial
       applyFeatures()
       service.registerScene(screenName, sceneWin)
       service.sceneShown(screenName, visible)
@@ -104,7 +108,10 @@ PanelWindow {
     stepFailures = 0
     canvas.requestPaint()
   }
-  Component.onDestruction: if (service) service.unregisterScene(screenName, sceneWin)
+  Component.onDestruction: {
+    anchorReset()
+    if (service) service.unregisterScene(screenName, sceneWin)
+  }
 
   onWidthChanged: if (world) Sim.resize(world, width, height, groundInset)
   onHeightChanged: if (world) Sim.resize(world, width, height, groundInset)
@@ -136,6 +143,7 @@ PanelWindow {
     if (live || !world) return
     // Off: nothing keeps falling in the background, and the canvas is cleared.
     world.particles = []
+    if (goldenZone.w > 0) goldenZone = noZone
     canvas.requestPaint()
   }
 
@@ -280,9 +288,10 @@ PanelWindow {
       if (sceneWin.live) {
         sceneWin.world.quality = sceneWin.service.quality
         var p = sceneWin.service.pointer
-        var local = p.present ? { x: p.x - sceneWin.screen.x, y: p.y - sceneWin.screen.y, vx: p.vx, vy: p.vy,
-                                  present: p.x >= sceneWin.screen.x && p.x < sceneWin.screen.x + sceneWin.width
-                                        && p.y >= sceneWin.screen.y && p.y < sceneWin.screen.y + sceneWin.height,
+        var sx = sceneWin.screen ? sceneWin.screen.x : 0, sy = sceneWin.screen ? sceneWin.screen.y : 0
+        var local = p.present ? { x: p.x - sx, y: p.y - sy, vx: p.vx, vy: p.vy,
+                                  present: p.x >= sx && p.x < sx + sceneWin.width
+                                        && p.y >= sy && p.y < sy + sceneWin.height,
                                   stillFor: p.stillFor, age: p.at ? Math.max(0, Date.now() - p.at) / 1000 : 0 } : null
         Sim.setStrings(sceneWin.world, sceneWin.stringSpecList)
         try {
@@ -300,6 +309,13 @@ PanelWindow {
         for (var e = 0; e < events.length; e++) {
           if (events[e].type === "yank") sceneWin.dropRiders(events[e])
           else sceneWin.service.sceneEvent(sceneWin, events[e])
+        }
+        var gr = Sim.goldenRect(sceneWin.world)
+        if (gr) {
+          if (Math.abs(gr.x - sceneWin.goldenZone.x) > 1 || Math.abs(gr.y - sceneWin.goldenZone.y) > 1 || sceneWin.goldenZone.w <= 0)
+            sceneWin.goldenZone = gr
+        } else if (sceneWin.goldenZone.w > 0) {
+          sceneWin.goldenZone = sceneWin.noZone
         }
         canvas.requestPaint()
         sceneWin.anchorTick()
@@ -377,19 +393,9 @@ PanelWindow {
 
   // The golden snowflake takes a click wherever it is.
   property var goldenZone: noZone
-  Timer {
-    interval: 50
-    repeat: true
-    running: sceneWin.live && !!sceneWin.world && !!sceneWin.world.golden
-    onTriggered: {
-      var r = Sim.goldenRect(sceneWin.world)
-      sceneWin.goldenZone = r ? r : sceneWin.noZone
-    }
-    onRunningChanged: if (!running) sceneWin.goldenZone = sceneWin.noZone
-  }
   MouseArea {
     x: sceneWin.goldenZone.x; y: sceneWin.goldenZone.y; width: sceneWin.goldenZone.w; height: sceneWin.goldenZone.h
-    enabled: sceneWin.goldenZone.w > 0
+    enabled: sceneWin.live && sceneWin.goldenZone.w > 0
     cursorShape: Qt.PointingHandCursor
     onPressed: Sim.catchGolden(sceneWin.world)
   }
@@ -424,16 +430,31 @@ PanelWindow {
   property var anchorHeld: ({})       // id -> true once the plugin has both strips
   property var anchorSigs: ({})       // id -> fingerprint last sent
   property var anchorAt: ({})         // id -> clock when last sent
+  property var anchorActiveFiles: ({}) // id -> [paths] currently held by the plugin
   property int anchorSeq: 0
-  property var anchorJob: null        // { id, strips, files, i, sig }
+  property int anchorJobSeq: 0
+  property var anchorJob: null        // { seq, id, strips, files, i, sig, started }
   readonly property bool anchorOn: !!service && service.anchorAvailable && live
+
+  function cleanupAnchorFiles(paths) {
+    if (paths && paths.length) Quickshell.execDetached(["rm", "-f", "--"].concat(paths))
+  }
 
   function anchorReset() {
     var gone = Object.keys(anchorHeld)
-    anchorHeld = ({}); anchorSigs = ({}); anchorAt = ({}); anchorJob = null
+    var toClear = [], filesToDelete = []
+    for (var i = 0; i < gone.length; i++) {
+      var id = gone[i]
+      if (!service || !service.sceneShowing(id)) {
+        toClear.push(Policy.anchorClear(id))
+        if (anchorActiveFiles[id]) filesToDelete = filesToDelete.concat(anchorActiveFiles[id])
+      }
+    }
+    anchorHeld = ({}); anchorSigs = ({}); anchorAt = ({}); anchorActiveFiles = ({}); anchorJob = null
     if (world) world.anchored = null
-    if (gone.length && service && service.anchorAvailable)
-      service.anchorSend(Policy.anchorBatch(gone.map(function(id) { return Policy.anchorClear(id) })), gone.length, null)
+    if (toClear.length && service && service.anchorAvailable)
+      service.anchorSend(Policy.anchorBatch(toClear), toClear.length, null)
+    cleanupAnchorFiles(filesToDelete)
     canvas.requestPaint()
   }
   onAnchorOnChanged: if (!anchorOn) anchorReset()
@@ -447,15 +468,26 @@ PanelWindow {
       anchorJob = null
     }
     if (!anchorOn || anchorJob || !world || !service.anchorDirReady) return
-    // Windows that left this screen (closed, another workspace): theirs go.
+    // Windows that left this screen (closed, another workspace): theirs go,
+    // unless another screen's scene is already showing that window.
     var ids = windowRects.map(function(r) { return r.id })
     var gone = Policy.anchorGone(anchorHeld, ids)
     if (gone.length) {
       var held = Object.assign({}, anchorHeld)
-      for (var g = 0; g < gone.length; g++) { delete held[gone[g]]; delete anchorSigs[gone[g]] }
+      var clearCmds = [], filesToDelete = []
+      for (var g = 0; g < gone.length; g++) {
+        var gid = gone[g]
+        delete held[gid]; delete anchorSigs[gid]; delete anchorAt[gid]
+        if (!service.sceneShowing(gid)) {
+          clearCmds.push(Policy.anchorClear(gid))
+          if (anchorActiveFiles[gid]) filesToDelete = filesToDelete.concat(anchorActiveFiles[gid])
+        }
+        delete anchorActiveFiles[gid]
+      }
       anchorHeld = held
       world.anchored = held
-      service.anchorSend(Policy.anchorBatch(gone.map(function(id) { return Policy.anchorClear(id) })), gone.length, null)
+      if (clearCmds.length) service.anchorSend(Policy.anchorBatch(clearCmds), clearCmds.length, null)
+      cleanupAnchorFiles(filesToDelete)
     }
     // The window most overdue for fresh strips.
     var best = null, bestLate = 0
@@ -475,7 +507,7 @@ PanelWindow {
     anchorSeq++
     var files = strips.map(function(st) { return Policy.anchorFile(service.anchorDir, best.id, st.slot, anchorSeq) })
     if (files.indexOf("") >= 0) return
-    anchorJob = { id: best.id, strips: strips, files: files, i: 0, sig: best.sig, started: clock }
+    anchorJob = { seq: ++anchorJobSeq, id: best.id, strips: strips, files: files, i: 0, sig: best.sig, started: clock }
     anchorPaintNext()
   }
   function anchorPaintNext() {
@@ -491,12 +523,16 @@ PanelWindow {
     if (!anchorCanvas.save(job.files[job.i])) { console.warn("flurry: could not write " + job.files[job.i]); anchorJob = null; return }
     if (++job.i < job.strips.length) { anchorPaintNext(); return }
     var cmds = job.strips.map(function(st, k) { return Policy.anchorSet(job.id, st, job.files[k]) })
-    var id = job.id, sig = job.sig, at = clock
+    var id = job.id, sig = job.sig, at = clock, jobSeq = job.seq, files = job.files
     service.anchorSend(Policy.anchorBatch(cmds), cmds.length, function(text) {
       var ok = Policy.anchorReplies(String(text || ""), cmds.length)
-      sceneWin.anchorJob = null
-      if (!sceneWin.anchorOn) return
+      if (sceneWin.anchorJob && sceneWin.anchorJob.seq === jobSeq) sceneWin.anchorJob = null
+      if (!sceneWin.anchorOn) { sceneWin.cleanupAnchorFiles(files); return }
       if (ok.every(function(v) { return v })) {
+        var prev = sceneWin.anchorActiveFiles[id] || []
+        var stale = prev.filter(function(p) { return files.indexOf(p) < 0 })
+        sceneWin.cleanupAnchorFiles(stale)
+        sceneWin.anchorActiveFiles[id] = files
         sceneWin.anchorSigs[id] = sig
         sceneWin.anchorAt[id] = at
         if (!sceneWin.anchorHeld[id]) {
@@ -649,6 +685,18 @@ PanelWindow {
       if (!known && pl.windowClass) {
         var r = rectForClass(pl.windowClass)
         if (r) { service.moveItem("snowman", m.id, Object.assign({}, pl, { windowAddress: r.id })); continue }
+        var migrated = false
+        for (var sk in service.scenes) {
+          var otherScene = service.scenes[sk]
+          if (!otherScene || otherScene === sceneWin || !otherScene.rectForClass) continue
+          var ro = otherScene.rectForClass(pl.windowClass)
+          if (ro) {
+            service.moveItem("snowman", m.id, Object.assign({}, pl, { screen: otherScene.screenName, windowAddress: ro.id }))
+            migrated = true
+            break
+          }
+        }
+        if (migrated) continue
         // Give the session a moment to show its windows before giving up.
         if (Date.now() - startedAt < 4000 || classAlive(pl.windowClass)) continue
       }
@@ -851,6 +899,7 @@ PanelWindow {
   function trainDeliver(gift) { queueTrain({ type: "deliver", gift: gift }) }
   function trainDepart(cargo) { queueTrain({ type: "depart", cargo: cargo }) }
   function queueTrain(job) {
+    if (job.type === "deliver" && trainJobs.length >= 16) return
     trainJobs = trainJobs.concat([job])
     if (train.mode === "") train.next()
   }
@@ -1024,6 +1073,7 @@ PanelWindow {
       anchors.centerIn: parent
       width: Math.min(296, implicitWidth)
       wrapMode: Text.Wrap
+      textFormat: Text.PlainText
       text: sceneWin.bubble ? sceneWin.bubble.text : ""
       color: "#3a2f22"
       font.pixelSize: 14
