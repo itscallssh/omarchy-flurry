@@ -259,3 +259,17 @@ test("two monitors at different scales: a window moved across takes its snow alo
   assert.ok(fresh === 0 && Math.abs(m2 - m0) < 1e-6 * m0, "handed over: " + m2 + " vs " + m0)
   assert.strictEqual(Object.keys(shared.stash).length, 0, "nothing left over in the stash")
 })
+
+test("recording 11-39-11 @27 s: a window held over another's top edge leaves no bare stretch on that ledge", () => {
+  const back = { id: "0xbk", x: 10, y: 40, w: 1900, h: 1000, floating: false, z: 1 }
+  const front = { id: "0xfr", x: 900, y: 10, w: 700, h: 500, floating: true, z: 0 }
+  const w = S.createWorld(1920, 1080, { effect: "snow", intensity: 1, plow: false })
+  S.setFeatures(w, { icicles: false })
+  run(w, [back, front], 60)
+  run(w, [back], 0.5, [back.id])   // the floating window closes
+  const b = w.surfaces[back.id].bins
+  const mean = (x0, x1) => { let s = 0, n = 0; for (let i = Math.floor((x0 - back.x) / 4); i < Math.floor((x1 - back.x) / 4); i++) { s += b[i]; n++ } return s / n }
+  const sheltered = mean(front.x + 40, front.x + front.w - 40), open = mean(100, 800)
+  assert.ok(open > 3, "the ledge filled: " + open.toFixed(1))
+  assert.ok(sheltered > 0.75 * open, "under the front window " + sheltered.toFixed(1) + " vs " + open.toFixed(1))
+})
