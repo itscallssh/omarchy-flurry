@@ -333,6 +333,7 @@ PanelWindow {
   Connections {
     target: sceneWin.service
     function onWakeScenes() { sceneWin.wake() }
+    function onWindowOpenedAt(id) { if (sceneWin.world && sceneWin.live) { Sim.noteOpened(sceneWin.world, id); sceneWin.wake() } }
   }
   Timer {
     id: idleLook

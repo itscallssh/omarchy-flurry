@@ -434,6 +434,7 @@ Item {
     }
     root.windowEpoch++
   }
+  signal windowOpenedAt(string id)
   function windowOpened(addr) {
     var k = addrKey(addr)
     if (!k) return
@@ -443,6 +444,8 @@ Item {
       delete next[k]
       root.closedWindows = next
     }
+    // The scenes jostle the ledges around it when it shows up.
+    root.windowOpenedAt("0x" + k)
     // It exists from now on, before the next `hyprctl clients` says so.
     if (root.liveWindows && !root.liveWindows[k]) {
       var live = Object.assign({}, root.liveWindows)
