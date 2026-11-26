@@ -207,6 +207,9 @@ PanelWindow {
   // windows only run their sway while it can matter.
   property real lastSurfaceChange: -10
   readonly property bool windowsMoving: clock - lastSurfaceChange < 1.5
+  // When a window here last changed place or size (a focus change or a
+  // restacking does not count): a drag is that, with the pointer moving.
+  property real lastGeometryChange: -10
 
   // Windows seen on this screen this session, and where each was last, so
   // something riding a window that closes can be put down where it was.
@@ -243,7 +246,9 @@ PanelWindow {
   property int focusSeqSeen: 0
   function syncWindows() {
     var rects = readWindows()
-    var sig = rects.map(function(r) { return [r.id, r.x, r.y, r.w, r.h, r.floating ? 1 : 0, r.z].join(",") }).join(";")
+    // In id order: the toplevel list's own order says nothing about the
+    // windows, and a reordering alone must not read as motion.
+    var sig = rects.map(function(r) { return [r.id, r.x, r.y, r.w, r.h, r.floating ? 1 : 0, r.z].join(",") }).sort().join(";")
     // A fresh snapshot that shows the focused window where it was: it has
     // stopped, so its snow is painted where it is (see draw.js leadOf).
     var snap = service.focusSeq !== focusSeqSeen ? service.focusSnap : null
@@ -255,6 +260,11 @@ PanelWindow {
     if (surfaceSig !== "") service.noteMotion()
     var gone = surfaceSig !== "" && rects.length < windowRects.length
     surfaceSig = sig
+    // A window really moved or changed size (not just focus or stacking).
+    for (var g = 0; g < rects.length; g++) {
+      var was = lastRects[rects[g].id]
+      if (was && (was.x !== rects[g].x || was.y !== rects[g].y || was.w !== rects[g].w || was.h !== rects[g].h)) { lastGeometryChange = clock; break }
+    }
     windowRects = rects
     lastSurfaceChange = clock
     Sim.setSurfaces(world, rects, clock, aliveIds(), motionHint())
@@ -829,7 +839,12 @@ PanelWindow {
     c.fullscreen = fullscreenApp
     // A window being dragged (or anything moved in the last moment and the
     // pointer is moving): nothing lands on a moving target.
-    c.dragging = windowsMoving && !!service && Date.now() - service.lastPointerMove < 1500
+    // Only a real drag: a window changing place in the last half second
+    // while the pointer moves. (It used to be any change to the window list
+    // in the last 1.5 s, focus and stacking included, with the pointer
+    // moved in the last 1.5 s: with focus following the mouse that held
+    // the visitors off for as long as the mouse was in use.)
+    c.dragging = clock - lastGeometryChange < 0.5 && !!service && Date.now() - service.lastPointerMove < 500
     return c
   }
   // force: a named call (`flurry surprise rabbit`), which comes even with

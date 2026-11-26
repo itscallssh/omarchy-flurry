@@ -203,6 +203,16 @@ Item {
     if (shown) next[name] = true; else delete next[name]
     root.shownScenes = next
   }
+  // The focused screen's scene when it is live (shown, not under a
+  // fullscreen app), else any live one: a visitor goes where it can be
+  // seen, and a fullscreen app on the focused monitor does not keep them
+  // away from the other.
+  function liveScene() {
+    var f = focusedScene()
+    if (f && f.live) return f
+    for (var k in root.scenes) if (root.scenes[k].live) return root.scenes[k]
+    return f
+  }
   function focusedScene() {
     var m = Hyprland.focusedMonitor
     if (m && root.scenes[m.name]) return root.scenes[m.name]
@@ -1549,25 +1559,44 @@ Item {
     return c
   }
 
+  // The schedule is kept as a time (surpriseNextAt), checked every few
+  // seconds while Flurry shows, rather than as a one-shot Timer restarted
+  // from its own onTriggered: that timer started again from zero whenever
+  // the scenes hid and showed (a fullscreen app, a visitor's errand, the
+  // panel's switches), and a restart() made inside onTriggered could be
+  // undone by Qt finishing the one-shot run, so on a busy desktop the
+  // robin and the hare could wait forever. Now the time only moves when a
+  // visit comes, misses (looked at again in 15 s) or the scenes first show.
   Timer {
     id: surpriseTimer
     running: root.showing && root.saved.surprises
-    interval: Policy.planSurprise([], Date.now(), {}, Math.random, { first: true }).delay
-    onRunningChanged: if (running) root.surpriseNextAt = Date.now() + interval
+    repeat: true
+    interval: Policy.SURPRISE.check
+    onRunningChanged: {
+      if (!running) return
+      var now = Date.now()
+      // Back after a long time away (or the first time): the first visit
+      // comes within a minute or two, as when Flurry starts.
+      if (root.surpriseNextAt <= 0 || root.surpriseNextAt - now > Policy.SURPRISE.minGap + Policy.SURPRISE.spread
+          || now - root.surpriseNextAt > 10 * 60000)
+        root.surpriseNextAt = now + Policy.planSurprise(root.surpriseHistory, now, {}, Math.random, { first: true }).delay
+    }
     onTriggered: {
+      var now = Date.now()
+      if (now < root.surpriseNextAt) return
       var came = false
       try { came = root.surpriseAttempt("", false).came } catch (e) { root.noteFault("surprise scheduler", e) }
-      interval = Policy.planSurprise(root.surpriseHistory, Date.now(), {}, Math.random, { missed: !came }).delay
-      root.surpriseNextAt = Date.now() + interval
-      restart()
+      root.surpriseMisses = came ? 0 : root.surpriseMisses + 1
+      root.surpriseNextAt = now + Policy.planSurprise(root.surpriseHistory, now, {}, Math.random, { missed: !came }).delay
     }
   }
+  property int surpriseMisses: 0
 
   // One try: picks what may come (or takes `kind`), checks it may, and
   // sends it. A manual call (`flurry surprise rabbit`) skips the timing and
   // the surprises switch but not the sense: no hare in the rain.
   function surpriseAttempt(kind, manual) {
-    var scene = focusedScene()
+    var scene = liveScene()
     var res = { at: new Date().toISOString(), kind: "", came: false, why: "", manual: !!manual }
     if (!scene || !root.active) { res.why = "no screen"; root.surpriseLast = res; return res }
     var ctx = surpriseContextOf(scene)
@@ -1648,7 +1677,7 @@ Item {
       gates: { enabled: root.saved.enabled, effect: root.saved.effect, surprises: root.saved.surprises, calm: root.calmActive,
                calmMode: root.saved.calm, decorating: root.decorating, onBattery: root.onBattery, quality: root.quality,
                dayCycle: root.saved.dayCycle, plow: root.saved.plow, fullscreen: scene ? scene.fullscreenApp : false },
-      timer: { running: surpriseTimer.running, nextAt: root.surpriseNextAt },
+      timer: { running: surpriseTimer.running, nextAt: root.surpriseNextAt, misses: root.surpriseMisses },
       ctx: surpriseContextOf(scene), faults: faults
     }), null, 1)
   }
