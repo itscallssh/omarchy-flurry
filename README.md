@@ -48,7 +48,7 @@ Get the latest fixes and features whenever you like:
 omarchy plugin update itscallssh.flurry
 ```
 
-It shows you what changed, asks before applying it, and reloads Flurry. Your
+or `flurry update` (add `--yes` to skip the question). It shows you what changed, asks before applying it, and reloads Flurry. Your
 trees, snowmen, friends and settings stay as they are. Add `--yes` to skip the
 question, or leave out the name to update all your plugins at once.
 
@@ -170,7 +170,9 @@ through `pw-play` or `paplay`.
 
 ## 🪶 Light on your machine
 
-While it's off or hidden, Flurry stops watching your windows and pointer entirely. It pauses under
+While it's off or hidden, Flurry stops watching your windows and pointer entirely. When nothing on
+screen is moving (a clear sky over lying snow), it stops drawing frames and only looks in once a
+second. It reads your window list on a timer only while you drag a window. It pauses under
 fullscreen apps, slows down on battery, and has a calm mode for work hours. A full-snow frame
 costs about 0.25 ms of simulation on a 2560×1440 screen.
 
@@ -409,14 +411,17 @@ Click a snowman to dress it one piece at a time: hat, carrot nose, then a scarf 
 This is opt-in. Pick a friend with `flurry throwto <friend>` and turn it on with `flurry throwing`. Throw a snowball off the edge of your screen faster than about 1150 px/s and it travels over ntfy. It flies in from the matching side of your friend's desktop and bursts on the first thing it hits.
 
 #### Calm, fullscreen and battery
-- Flurry pauses while a fullscreen window is active.
+- Flurry pauses while a fullscreen window is active, on the workspace or in an open special workspace (scratchpad). Going fullscreen hides the scene cleanly: nothing keeps falling, sounds stop, and with the anchor plugin the icicles and frost it drew on your windows are taken off too.
 - On battery it runs at 30 fps, and below 20% charge at 24 fps.
 - `flurry calm on|off|work` turns off surprises and fireworks and softens the snow. With `work`, calm mode applies only during the `workHours` set in `state.json`.
 
 #### How the snow treats your windows
 - Falling snow is drawn behind windows and only settles on their top edges. It never covers what's inside a window.
-- A window's ledge snow, icicles, lights, snowmen, perched birds and resting snowballs are tied to that window's Hyprland address. When the window closes or leaves the workspace or monitor, they're released straight away: the ledge falls as loose snow and nothing is left floating.
-- `hyprctl -j clients` decides which windows exist. Flurry checks it every 30 s and after every window event, and ignores any reply that arrived before a window closed.
+- A window's ledge snow, icicles, lights, snowmen, perched birds and resting snowballs are tied to that window's Hyprland address. When the window closes, they're released straight away: the ledge falls as loose snow with a small puff of dust, and nothing is left floating.
+- When a window goes to another workspace or monitor, what lies on it is put aside and comes back with it, a little melted if it was away long. Rain on its top stays wet too. Flurry gives a window 2.5 s before it treats it as gone, so a window that drops out of the window list for a moment during a workspace switch doesn't lose its snow. A window Hyprland says has closed is let go at once. When you unplug a monitor, the snow on its windows moves with them to the screen they land on.
+- A window opening next to snowy windows knocks a little loose snow off the ledges near it (within about 160 px): a few clumps and a dusting, never more. Focusing a window does nothing but restack.
+- A window behind another keeps collecting snow on the part of its top edge that is covered, out of sight. When the front window moves away, that stretch is as deep as the rest.
+- `hyprctl -j clients` decides which windows exist. Flurry checks it every 30 s while a scene shows and after every window event, and ignores any reply that arrived before a window closed. Opening or closing the special workspace re-reads the monitors, so the scratchpad's windows get (and lose) their ledges as it toggles.
 - A gentle drag carries the snow. What holds it on is friction plus the bond packed snow forms with the window (together 1.6 g for fresh powder up to 2.6 g for settled snow). A drag that speeds up more gently than that keeps its ledge. Only a long, fast run blows some powder off, and only a sharp drop held for over 70 ms lifts the snow off.
 - Yank a window sideways and the snow stays where it was, like plates when a tablecloth is pulled out from under them. Flurry adds up how far the window's change in speed outruns what the snow's grip can pass on. Once that excess passes the speed at which kinetic friction (μk 0.2–0.3) would need more than 16 px to catch the snow up (about 115 px/s), the bond breaks. In practice that means going from rest to about 400–550 px/s within a tenth of a second (less for fresh powder, more for settled snow), or to 1500 px/s within a third of a second. The whole ledge comes loose in the next frame as clumps of a few sizes, each keeping its own place on screen. The window slides out from under them. A clump falls as soon as the window's edge has passed it, so the ledge drops right where it was, a column at a time. Kinetic friction only gives the snow a little of the window's speed (a couple of hundred px/s at most), so none of it is thrown. Pieces tumble, break in two and shed a little powder, and the snow's mass is kept. If the window stops while it is still under some of the snow, that snow settles back onto it. Icicles snap off where they hung, a perched bird takes off, and a snowman riding the window drops to the ground where it stood.
 - A window that moves with no pointer dragging it keeps its snow: the snow moves with it and nothing is read as a jolt. That covers a tiling relayout, a workspace switch, a keyboard move, and a window opening, closing, floating or going fullscreen. Hyprland reports no button state while you drag, so a drag is recognised by the pointer instead. It has to be moving, on the window or within a poll's travel of it, going the same way, and no layout event can have fired in the last 0.3 s. The first sample of a drag comes after the idle poll, so its speed is taken over the poll gap plus the 50 ms pointer poll. A long gap is therefore not mistaken for a huge speed, and a real yank is not mistaken for a jump. During an active drag, a big step counts as a yank even if the pointer reading lags.
@@ -446,6 +451,7 @@ flurry code               # your friend code
 flurry add flurry1:…      # or with no argument, from the clipboard
 flurry note Ali "Merry Christmas!"
 flurry status
+flurry update             # omarchy plugin update for Flurry (--yes to skip the question)
 ```
 
 or directly: `omarchy-shell flurry effect sakura`.
@@ -477,9 +483,19 @@ context, so nothing a failed paint left behind carries into the next.
 Everything draws on one canvas per screen in batched paths. On battery the
 effect is halved and capped at 30 fps (turn that off in the menu), and it
 stops while a fullscreen app is up. Hyprland sends no events during an
-interactive window drag, so while the effect is on the window list is
-refreshed over Hyprland's socket every 400 ms (200 ms when the pointer feed is off), and every frame for two seconds
-after something moves, so the physics sees a drag as smooth motion. The
+interactive window drag, so the window list is read over Hyprland's socket
+every frame while a drag is under way: from the moment the focused window
+moves in the pointer feed (or any window is seen moving) until two seconds
+after the last move. The rest of the time Hyprland's window events say when
+to read it, and a focus change is a single read. When nothing in a scene
+moves (no snow falling, nothing in the air or sliding, no visitor), it stops
+its frame loop after a moment and looks in once a second: it reads the
+windows, steps the slow things (a thaw, icicles growing) through that second
+and paints once. A window event, a drag, the pointer, a switch or a visitor
+wakes it at once. Its clock follows real time, so a long frame or an idle
+spell never slows the weather down. Nothing runs on a timer while no scene
+shows, except the checks that decide whether one should (calm hours, battery,
+the New Year countdown, live weather). The
 pointer is read for every effect but rain and starfall. The simulation costs
 about 0.25 ms a frame on a 2560×1440 screen with six windows at full snow
 (measured under node). A terminal with 25 window lights adds about 1.5 ms of
