@@ -554,7 +554,11 @@ Item {
   // config; nothing polls it.
   property int windowBorder: 2
   property bool borderRead: false
-  onShowingChanged: if (showing && !borderRead) readBorder()
+  onShowingChanged: {
+    if (!showing) return
+    if (!borderRead) readBorder()
+    Hyprland.refreshMonitors()
+  }
   function readBorder() {
     borderRead = true
     if (borderProc.running) return
@@ -587,6 +591,16 @@ Item {
       var name = String(event.name)
       if (name === "configreloaded") root.readBorder()
       if (!root.showing) return
+      // Monitors and what they reserve (the bar, panels): the scenes keep
+      // out of the reserved areas and stand the ground above the bottom one,
+      // so they are read again whenever those can have changed (and when
+      // the scenes show again). Quickshell fills
+      // HyprlandMonitor.lastIpcObject only on refreshMonitors().
+      switch (name) {
+      case "monitoradded": case "monitoraddedv2": case "monitorremoved": case "monitorremovedv2":
+      case "configreloaded": case "openlayer": case "closelayer":
+        monitorsSoon.restart()
+      }
       switch (name) {
       case "closewindow":
         root.windowClosed(String(event.data).split(",")[0])
@@ -613,6 +627,14 @@ Item {
         clientsSoon.restart()
       }
     }
+  }
+
+  // Layer events come in bursts (a bar reloading opens a layer per
+  // monitor), so the monitors are read once after the burst.
+  Timer {
+    id: monitorsSoon
+    interval: 120
+    onTriggered: Hyprland.refreshMonitors()
   }
 
   // ---------------------------------------------------------- pointer feed

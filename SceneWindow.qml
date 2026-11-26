@@ -33,12 +33,18 @@ PanelWindow {
   readonly property bool live: effectOn && !fullscreenApp
   readonly property bool busy: santa.running || yeti.mode !== "" || train.mode !== ""
 
-  // The ground sits above anything reserving the bottom of the screen.
-  readonly property real groundInset: {
-    var r = monitor && monitor.lastIpcObject && monitor.lastIpcObject.reserved ? monitor.lastIpcObject.reserved : [0, 0, 0, 0]
-    return Number(r[3]) || 0
-  }
+  // What the monitor reserves for the bar and any panels (hyprctl
+  // monitors `reserved`). The scene's surface is kept out of the top, left
+  // and right ones (margins below), so nothing it paints, no snow, no
+  // icicle, no visitor, ever covers the bar; the ground sits above the
+  // bottom one. Read again on monitor and layer events (Service.qml).
+  readonly property var reservedArea: Policy.reservedOf(monitor && monitor.lastIpcObject ? monitor.lastIpcObject.reserved : null,
+                                                        screen ? screen.width : 0, screen ? screen.height : 0)
+  readonly property real groundInset: reservedArea.bottom
   readonly property real groundY: height - groundInset
+  // The scene's top-left corner in Hyprland's global layout px.
+  readonly property real originX: (screen ? screen.x : 0) + reservedArea.left
+  readonly property real originY: (screen ? screen.y : 0) + reservedArea.top
 
   color: "transparent"
   // A visitor (Santa, the Yeti, a delivery) never shows over a fullscreen
@@ -47,6 +53,7 @@ PanelWindow {
   onVisibleChanged: if (service) service.sceneShown(screenName, visible)
   exclusionMode: ExclusionMode.Ignore
   anchors { top: true; bottom: true; left: true; right: true }
+  margins { top: sceneWin.reservedArea.top; left: sceneWin.reservedArea.left; right: sceneWin.reservedArea.right }
   WlrLayershell.namespace: "flurry"
   WlrLayershell.layer: WlrLayer.Top
   WlrLayershell.keyboardFocus: decorating ? WlrKeyboardFocus.Exclusive : WlrKeyboardFocus.None
@@ -157,39 +164,25 @@ PanelWindow {
     return k ? "0x" + k : ""
   }
   function readWindows() {
-    var rects = []
-    if (!workspace || !service) return rects
-    var sx = screen ? screen.x : 0, sy = screen ? screen.y : 0
+    if (!workspace || !service) return []
     var mon = monitor && monitor.lastIpcObject ? monitor.lastIpcObject : null
-    var special = mon && mon.specialWorkspace && mon.specialWorkspace.id ? Number(mon.specialWorkspace.id) : 0
-    var wsId = Number(workspace.id)
     var all = Hyprland.toplevels.values
-    var seen = {}
+    var items = []
     for (var i = 0; i < all.length; i++) {
       var ipc = all[i].lastIpcObject
-      if (!ipc || !ipc.at || !ipc.size || ipc.hidden || ipc.mapped === false) continue
-      var ws = ipc.workspace ? Number(ipc.workspace.id) : NaN
-      // Its own workspace says where it is; Quickshell's lists can lag.
-      if (ws !== wsId && !(special && ws === special)) continue
-      var id = windowId(ipc, all[i])
-      if (!id || seen[id] || !service.windowExists(id)) continue
-      seen[id] = true
-      var x = Number(ipc.at[0]) - sx, y = Number(ipc.at[1]) - sy, w = Number(ipc.size[0]), h = Number(ipc.size[1])
-      if (!isFinite(x + y + w + h)) continue
-      rects.push({
-        id: id,
-        cls: String(ipc["class"] || ""),
-        x: x, y: y, w: w, h: h,
-        // The special workspace is shown over everything else.
-        floating: !!ipc.floating || (special > 0 && ws === special),
-        z: ipc.focusHistoryID === undefined ? 50 : Number(ipc.focusHistoryID)
-      })
+      if (ipc) items.push({ ipc: ipc, id: windowId(ipc, all[i]) })
     }
+    var rects = Policy.sceneRects(items, {
+      wsId: Number(workspace.id),
+      special: mon && mon.specialWorkspace && mon.specialWorkspace.id ? Number(mon.specialWorkspace.id) : 0,
+      ox: originX, oy: originY,
+      exists: function(id) { return service.windowExists(id) }
+    })
     // The focused window (the one a drag moves) is read from the pointer
     // feed's snapshot when that is fresher than the list: the list answers
     // a poll or two behind the compositor, and its snow would trail the
     // window. Every rect also says how old its reading is (age, s).
-    return Policy.withSnapshot(rects, service.focusSnap, Date.now(), sx, sy, service.windowsReadAt, 150)
+    return Policy.withSnapshot(rects, service.focusSnap, Date.now(), originX, originY, service.windowsReadAt, 150)
   }
 
   // Every window that still exists, on any workspace or monitor: their snow
@@ -223,7 +216,7 @@ PanelWindow {
     var p = service.pointer
     var now = Date.now()
     return {
-      pointer: p.present ? { x: p.x - (screen ? screen.x : 0), y: p.y - (screen ? screen.y : 0), vx: p.vx, vy: p.vy,
+      pointer: p.present ? { x: p.x - originX, y: p.y - originY, vx: p.vx, vy: p.vy,
                              present: true, stillFor: p.stillFor + (p.at ? Math.max(0, now - p.at) / 1000 : 0) } : null,
       poll: service.windowPollGap,
       layoutAge: service.lastLayoutEvent ? (now - service.lastLayoutEvent) / 1000 : 1e9
