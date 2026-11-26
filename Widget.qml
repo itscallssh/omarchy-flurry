@@ -233,12 +233,19 @@ BarWidget {
 
   // ------------------------------------------------------------ panel
 
-  PopupCard {
+  // A KeyboardPanel, not a PopupCard: a PopupCard is an xdg-popup of the
+  // bar, whose layer surface never takes the keyboard, so it gets no keys
+  // and nothing could be typed into the city or name fields (the World
+  // section's city search did nothing at all). KeyboardPanel takes the
+  // keyboard while it is open, as the shell's own panels with text fields
+  // (weather, clock, network) do.
+  KeyboardPanel {
     id: popup
     anchorItem: root
     bar: root.bar
     owner: root
     open: root.popupOpen
+    focusTarget: flick
     contentWidth: popup.fittedContentWidth(Style.space(380))
     contentHeight: popup.fittedContentHeight(root.service ? body.implicitHeight : missingNote.implicitHeight)
 

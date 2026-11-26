@@ -1317,12 +1317,9 @@ Item {
     if (!root.weatherWanted || geoProc.running || weatherProc.running) return
     if (!root.weatherPlaced) {
       if (!root.saved.weatherCity || root.saved.weatherCity === root.missingCity) return
-      var gurl = Weather.geocodeUrl(root.saved.weatherCity)
-      if (!gurl) return
-      root.weatherStatus = "loading"
-      geoProc.collector = Policy.newCollector(Weather.MAX_RESPONSE_BYTES)
-      geoProc.command = weatherCurlArgs(gurl)
-      geoProc.running = true
+      geoProc.langs = Weather.geocodeLanguages(Weather.cityParts(root.saved.weatherCity).name)
+      geoProc.lang = 0
+      root.geocodeNext()
       return
     }
     var furl = Weather.forecastUrl(root.saved.weatherLat, root.saved.weatherLon)
@@ -1331,6 +1328,18 @@ Item {
     weatherProc.collector = Policy.newCollector(Weather.MAX_RESPONSE_BYTES)
     weatherProc.command = weatherCurlArgs(furl)
     weatherProc.running = true
+  }
+  // Ask the geocoder in the next language for the name's script (see
+  // Weather.geocodeLanguages).
+  function geocodeNext() {
+    var gurl = Weather.geocodeUrl(root.saved.weatherCity, geoProc.langs[geoProc.lang])
+    if (!gurl) return false
+    root.weatherStatus = "loading"
+    geoProc.city = root.saved.weatherCity
+    geoProc.collector = Policy.newCollector(Weather.MAX_RESPONSE_BYTES)
+    geoProc.command = weatherCurlArgs(gurl)
+    geoProc.running = true
+    return true
   }
   function weatherFailed() {
     root.weatherFailures++
@@ -1341,6 +1350,9 @@ Item {
   Process {
     id: geoProc
     property var collector: Policy.newCollector(Weather.MAX_RESPONSE_BYTES)
+    property var langs: ["en"]
+    property int lang: 0
+    property string city: ""        // the city this request is for
     stdout: SplitParser {
       splitMarker: ""
       onRead: function(chunk) {
@@ -1355,8 +1367,11 @@ Item {
       var c = geoProc.collector
       geoProc.collector = Policy.newCollector(Weather.MAX_RESPONSE_BYTES)
       if (code !== 0 || c.overflowed) { root.weatherFailed(); return }
-      var res = Weather.parseGeocodeStatus(c.buf)
+      // The city was changed while this was on its way: ask about the new one.
+      if (geoProc.city !== root.saved.weatherCity) { weatherSoon.restart(); return }
+      var res = Weather.parseGeocodeStatus(c.buf, Weather.cityParts(geoProc.city).hint)
       if (res.status === "error") { root.weatherFailed(); return }
+      if (res.status === "not_found" && geoProc.lang + 1 < geoProc.langs.length) { geoProc.lang++; Qt.callLater(root.geocodeNext); return }
       if (res.status === "not_found") {
         root.missingCity = root.saved.weatherCity
         root.weatherStatus = "not_found"
