@@ -58,10 +58,20 @@ test("the painter is Qt-clean and keeps to the window's edge", () => {
   const w = frozen(2), s = w.surfaces[FLOAT.id]
   let calls = []
   const e = Q.paint(ctx => {
+    // The painter works in the window's frame (translated to its corner):
+    // points are taken back to the screen's.
+    let off = [0, 0]
+    const stack = []
     const proxy = new Proxy(ctx, { get(t, k) {
       const v = t[k]
       if (typeof v !== "function") return v
-      return function(...a) { if (k === "moveTo" || k === "lineTo") calls.push(a); return v.apply(t, a) }
+      return function(...a) {
+        if (k === "translate") off = [off[0] + a[0], off[1] + a[1]]
+        if (k === "save") stack.push(off.slice())
+        if (k === "restore") off = stack.pop() || [0, 0]
+        if (k === "moveTo" || k === "lineTo") calls.push([a[0] + off[0], a[1] + off[1]])
+        return v.apply(t, a)
+      }
     } })
     D.drawIcicles(proxy, s, 2)
   })
@@ -83,7 +93,7 @@ test("the shell reads general:border_size once, again on configreloaded, and pas
   const scene = fs.readFileSync(path.join(__dirname, "..", "SceneWindow.qml"), "utf8")
   assert.match(svc, /"getoption", "general:border_size"/)
   assert.match(svc, /name === "configreloaded"\) root\.readBorder\(\)/)
-  assert.match(svc, /onShowingChanged: if \(showing && !borderRead\) readBorder\(\)/)
+  assert.match(svc, /onShowingChanged: \{\s*if \(!showing\) return\s*if \(!borderRead\) readBorder\(\)/)
   assert.doesNotMatch(svc, /Timer \{[^}]*readBorder/, "never on a timer")
   assert.match(scene, /border: service\.windowBorder/)
   assert.match(scene, /function onWindowBorderChanged\(\) \{ sceneWin\.applyFeatures\(\) \}/)
