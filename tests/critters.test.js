@@ -195,12 +195,12 @@ test("a yank snaps top-hung icicles too", () => {
 test("the snow plow switch: off, it never comes; mid-run it finishes and leaves; a call is refused", () => {
   const deep = w => { const g = w.surfaces.__ground; g.bins = g.bins.map(() => 20) }
   // On: deep ground snow brings it.
-  const on = S.createWorld(1600, 1000, { plow: true })
+  const on = S.createWorld(1600, 1000, { plow: true, arrival: false })
   deep(on); S.setEnv(on, { snowScale: 0 })
   run(on, 2, [])
   assert.ok(on.plow, "comes when it is on")
   // Off: never, however deep.
-  const off = S.createWorld(1600, 1000, { plow: false })
+  const off = S.createWorld(1600, 1000, { plow: false, arrival: false })
   deep(off); S.setEnv(off, { snowScale: 0 })
   run(off, 30, [])
   assert.strictEqual(off.plow, null)
@@ -211,7 +211,7 @@ test("the snow plow switch: off, it never comes; mid-run it finishes and leaves;
   assert.strictEqual(S.requestPlow(off), "sent")
   assert.strictEqual(S.requestPlow(off), "out")
   // Switched off mid-run: it finishes its pass, briskly, and is gone; then none comes back.
-  const mid = S.createWorld(1600, 1000, { plow: true })
+  const mid = S.createWorld(1600, 1000, { plow: true, arrival: false })
   deep(mid); S.setEnv(mid, { snowScale: 0 })
   run(mid, 3, [])
   assert.ok(mid.plow)

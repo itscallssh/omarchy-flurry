@@ -57,7 +57,7 @@ BarWidget {
   readonly property var whyKeys: ({
     "surprises are off": "why.surprisesOff", "calm mode": "why.calm", "a fullscreen app is up": "why.fullscreen",
     "battery is low": "why.lowBattery", "decorating": "why.decorating", "a window is moving": "why.dragging",
-    "the plow is out": "why.plow", "no sprouts up yet": "why.noSprouts", "no snow on the ground yet": "why.noGroundSnow",
+    "the plow is out": "why.plow", "the plow's visitors are here": "why.plowVisitors", "no sprouts up yet": "why.noSprouts", "no snow on the ground yet": "why.noGroundSnow",
     "Flurry is off": "why.off", "no screen": "why.noScreen", "no scene": "why.noScreen"
   })
   function whyText(why) {
