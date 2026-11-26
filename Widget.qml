@@ -35,7 +35,7 @@ BarWidget {
     freeze: 0xF0F2A, windGusts: 0xF059D, throwToFriends: 0xF0717, writing: 0xF0F49, dayCycle: 0xF12CB, seasons: 0xF0E66, newYear: 0xF0E30,
     themeSync: 0xF03D8, battery: 0xF1211, liveWeather: 0xF050F, calm: 0xF04B2, friends: 0xF000E, copy: 0xF018F,
     paste: 0xF014A, send: 0xF048A, remove: 0xF0156, baubles: 0xF03CF, gift: 0xF0E44,
-    sound: 0xF057E, soundOff: 0xF0581
+    sound: 0xF057E, soundOff: 0xF0581, wallpaper: 0xF02E9
   })
   function glyph(name) { return String.fromCodePoint(glyphs[name] || 0xF0598) }
   function effectName(name) { return strings.t("effect." + name) }
@@ -465,6 +465,13 @@ BarWidget {
 
           PanelSectionHeader { text: strings.t("section.desktop").toUpperCase(); foreground: Commons.Color.popups.text }
 
+          FeatureCard {
+            icon: root.glyph("wallpaper")
+            title: strings.t("wallpaper")
+            description: root.saved.wallpaper ? strings.t("wallpaper.desc.on") : strings.t("wallpaper.desc.off")
+            checked: !!root.saved.wallpaper
+            onToggled: root.service.setWallpaper(!root.saved.wallpaper)
+          }
           FeatureCard {
             icon: root.glyph("plow")
             title: strings.t("plow")

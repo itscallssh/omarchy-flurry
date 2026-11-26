@@ -18,7 +18,7 @@ test("every library call in the QML is imported and defined", () => {
     const src = fs.readFileSync(path.join(root, q), "utf8").split("\n").map(l => l.replace(/(^|\s)\/\/ .*$/, "")).join("\n")
     const imports = {}
     for (const m of src.matchAll(/^import "lib\/(\w+\.js)" as (\w+)/mg)) imports[m[2]] = m[1]
-    for (const m of src.matchAll(/\b(Sim|Draw|Policy|Store|Season|Weather|Theme|Snd)\.([A-Za-z_]\w*)/g)) {
+    for (const m of src.matchAll(/\b(Sim|Draw|Policy|Store|Season|Weather|Theme|Snd|Wallpaper)\.([A-Za-z_]\w*)/g)) {
       assert.ok(imports[m[1]], `${q} uses ${m[1]}.${m[2]} without importing ${m[1]}`)
       assert.ok(m[2] in libs[imports[m[1]]], `${q}: ${m[1]}.${m[2]} is not defined in lib/${imports[m[1]]}`)
       checked++

@@ -2,7 +2,7 @@
 # flurry: drive the Flurry plugin from a terminal or a Hyprland bind.
 #   flurry [toggle|on|off|next|effect <name>|intensity <0.25-2>|decorate|santa|yeti|plow [on|off|toggle]|lights|snowballs|
 #           shake|fireworks [seconds]|season <auto|winter|spring>|surprise [bird|rabbit|golden]|diag|freeze|
-#           weather [on|off|now|status]|city <name>|location <lat> <lon>|calm <off|on|work>|sound [on|off|test|status]|
+#           wallpaper [on|off|toggle|status|fade <seconds>]|weather [on|off|now|status]|city <name>|location <lat> <lon>|calm <off|on|work>|sound [on|off|test|status]|
 #           ornaments [style|next]|throwto <friend>|
 #           gusts|writing|daycycle|seasons|newyear|surprises|theme|throwing|
 #           code|name <name>|add <friend-code>|note <friend> <text>|status|clear|update [--yes]]
@@ -12,6 +12,7 @@ cmd=${1:-toggle}; shift || true
 case $cmd in
   toggle|on|off|next|decorate|santa|yeti|lights|snowballs|status|clear|shake|diag|freeze) call "$cmd" ;;
   plow) call plow "${1:-}" ;;
+  wallpaper) call wallpaper "${1:-status}" "${2:-}" ;;
   effect) call effect "${1:?snow|leaves|starfall|rain|sakura|fireflies}" ;;
   intensity) call intensity "${1:?0.25 to 2}" ;;
   fireworks) call fireworks "${1:-60}" ;;
