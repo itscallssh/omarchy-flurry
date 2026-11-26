@@ -131,11 +131,11 @@ PanelWindow {
 
   Connections {
     target: sceneWin.service
-    function onEffectChanged() { if (sceneWin.world) Sim.setEffect(sceneWin.world, sceneWin.service.effect) }
-    function onIntensityChanged() { if (sceneWin.world) Sim.setIntensity(sceneWin.world, sceneWin.service.intensity) }
-    function onPlowOnChanged() { if (sceneWin.world) Sim.setPlow(sceneWin.world, sceneWin.service.plowOn) }
-    function onEnvChanged() { if (sceneWin.world) Sim.setEnv(sceneWin.world, sceneWin.service.env) }
-    function onSavedChanged() { sceneWin.applyFeatures() }
+    function onEffectChanged() { if (sceneWin.world) Sim.setEffect(sceneWin.world, sceneWin.service.effect); sceneWin.wake() }
+    function onIntensityChanged() { if (sceneWin.world) Sim.setIntensity(sceneWin.world, sceneWin.service.intensity); sceneWin.wake() }
+    function onPlowOnChanged() { if (sceneWin.world) Sim.setPlow(sceneWin.world, sceneWin.service.plowOn); sceneWin.wake() }
+    function onEnvChanged() { if (sceneWin.world) Sim.setEnv(sceneWin.world, sceneWin.service.env); sceneWin.wake() }
+    function onSavedChanged() { sceneWin.applyFeatures(); sceneWin.wake() }
     function onThrowOnChanged() { sceneWin.applyFeatures() }
     function onWindowBorderChanged() { sceneWin.applyFeatures() }
     function onThemeChanged() { canvas.requestPaint() }
@@ -151,7 +151,9 @@ PanelWindow {
   // Yeti and the train carry things, so they finish their errand.)
   onEffectOnChanged: if (!effectOn && santa.running) { santa.running = false; santa.visible = false }
 
+  onStringSpecListChanged: wake()
   onLiveChanged: {
+    wake()
     if (live || !world) return
     // Off: nothing keeps falling in the background, and the canvas is cleared.
     world.particles = []
@@ -270,6 +272,7 @@ PanelWindow {
       return
     }
     if (surfaceSig !== "") service.noteMotion()
+    wake()
     var gone = surfaceSig !== "" && rects.length < windowRects.length
     surfaceSig = sig
     // A window really moved or changed size (not just focus or stacking).
@@ -289,19 +292,82 @@ PanelWindow {
     if (gone || rects.length) checkRiders()
   }
 
+  // ------------------------------------------------------------ idle
+  //
+  // The clock is real time: what the frame loop saw pass, and what passed
+  // while it rested (a long frame, an idle spell, a suspend). The simulation
+  // takes at most 0.1 s of it a frame, in ordinary steps (Sim.advance), so
+  // nothing jumps when the machine wakes.
+  property real lastFrameMs: 0
+  function realDt() {
+    var now = Date.now()
+    var d = lastFrameMs > 0 ? (now - lastFrameMs) / 1000 : 0
+    lastFrameMs = now
+    return isFinite(d) && d > 0 ? d : 0
+  }
+  // A scene with nothing moving (Sim.quiet: no snow falling, nothing in
+  // the air or sliding, no visitor, no window moving) rests its frame loop
+  // after a moment, and looks in once a second instead: it reads the
+  // windows, steps the slow things (a thaw, icicles) through the second in
+  // one go and paints once. Anything that starts something wakes it at once
+  // (wake()): a window event or drag, the pointer, a visitor, a switch.
+  readonly property bool wantsFrames: live || busy || decorating
+  property bool idle: false
+  property real quietFor: 0
+  function wake() {
+    quietFor = 0
+    if (!idle) return
+    idle = false
+  }
+  function noteQuiet(dt) {
+    var still = live && !busy && !decorating && !windowsMoving && clock - shakeAt > 3
+                && !snowHands.pressed && Sim.quiet(world)
+    quietFor = still ? quietFor + dt : 0
+    if (quietFor > 1.5) idle = true
+  }
+  onWantsFramesChanged: wake()
+  onBusyChanged: wake()
+  onDecoratingChanged: wake()
+  Connections {
+    target: sceneWin.service
+    function onWakeScenes() { sceneWin.wake() }
+  }
+  Timer {
+    id: idleLook
+    interval: 1000
+    repeat: true
+    running: sceneWin.visible && sceneWin.wantsFrames && sceneWin.idle
+    onTriggered: {
+      var real = sceneWin.realDt()
+      sceneWin.clock += real
+      sceneWin.syncWindows()
+      if (!sceneWin.live || !sceneWin.world) return
+      try { Sim.advance(sceneWin.world, Math.min(real, 2), { pointer: null }) } catch (e) { sceneWin.noteFault("step", e) }
+      var sounds = Sim.takeSounds(sceneWin.world)
+      for (var q = 0; q < sounds.length; q++) sceneWin.service.playCue(sounds[q])
+      var events = Sim.takeEvents(sceneWin.world)
+      for (var e2 = 0; e2 < events.length; e2++) {
+        if (events[e2].type === "yank") sceneWin.dropRiders(events[e2])
+        else sceneWin.service.sceneEvent(sceneWin, events[e2])
+      }
+      canvas.requestPaint()
+      sceneWin.anchorTick()
+      if (!Sim.quiet(sceneWin.world)) sceneWin.wake()
+    }
+  }
+
   FrameAnimation {
     id: frames
-    running: sceneWin.visible && (sceneWin.live || sceneWin.busy || sceneWin.decorating)
+    running: sceneWin.visible && sceneWin.wantsFrames && !sceneWin.idle
     onTriggered: {
-      // A long frame (a suspend, a stall) counts as an ordinary one, so
-      // nothing jumps when the machine wakes.
-      var dt = Math.min(Math.max(frameTime, 0), 0.1)
-      sceneWin.clock += dt
+      var real = sceneWin.realDt()
+      sceneWin.clock += real
+      var dt = Math.min(real, 0.1)
       // On battery the scene draws at 30 fps (24 when it runs low).
       if (sceneWin.service.fpsCap < 60) {
         sceneWin.frameDebt += dt
         if (sceneWin.frameDebt < 1 / sceneWin.service.fpsCap) return
-        dt = sceneWin.frameDebt
+        dt = Math.min(sceneWin.frameDebt, 0.1)
         sceneWin.frameDebt = 0
       }
       sceneWin.syncWindows()
@@ -315,7 +381,7 @@ PanelWindow {
                                   stillFor: p.stillFor, age: p.at ? Math.max(0, Date.now() - p.at) / 1000 : 0 } : null
         Sim.setStrings(sceneWin.world, sceneWin.stringSpecList)
         try {
-          Sim.step(sceneWin.world, dt, { pointer: local })
+          Sim.advance(sceneWin.world, dt, { pointer: local })
           sceneWin.stepFailures = 0
         } catch (e) {
           sceneWin.noteFault("step", e)
@@ -339,6 +405,7 @@ PanelWindow {
         }
         canvas.requestPaint()
         sceneWin.anchorTick()
+        sceneWin.noteQuiet(real)
       }
       sceneWin.stepVisitors(dt)
     }
@@ -391,6 +458,7 @@ PanelWindow {
     // Ctrl+drag writes in the snow instead of scooping it.
     property bool writing: false
     onPressed: function(mouse) {
+      sceneWin.wake()
       if (Sim.goldenAt(sceneWin.world, mouse.x, mouse.y)) { Sim.catchGolden(sceneWin.world); return }
       writing = false
       if ((mouse.modifiers & Qt.ControlModifier) && sceneWin.service.saved.writing) {
@@ -824,13 +892,14 @@ PanelWindow {
   // ------------------------------------------------------------ visitors
 
   // "sent", "off" (the switch is off) or "out" (one is already on its way).
-  function callPlow() { return world ? Sim.requestPlow(world) : "no screen" }
+  function callPlow() { wake(); return world ? Sim.requestPlow(world) : "no screen" }
 
   // The snow globe: everything lying about lifts and swirls, and the
   // decorations rock.
   property real shakeAt: -10
   function shake() {
     if (!world || !live) return false
+    wake()
     Sim.shake(world, 1)
     shakeAt = clock
     return true
@@ -838,9 +907,10 @@ PanelWindow {
 
   function startFireworks(seconds) {
     if (!world || !live) return false
+    wake()
     return Sim.startFireworks(world, seconds)
   }
-  function countdownTick(n) { if (world && live) Sim.countdownTick(world, n) }
+  function countdownTick(n) { if (world && live) { wake(); Sim.countdownTick(world, n) } }
 
   // What the visitors would find here now, for the scheduler and `flurry
   // diag` (see Sim.critterContext and Policy.surpriseBlock).
@@ -863,14 +933,15 @@ PanelWindow {
   // the plow out.
   function surprise(kind, force) {
     if (!world || !live) return false
+    wake()
     if (kind === "bird") return Sim.spawnBird(world)
     if (kind === "rabbit") return Sim.spawnRabbit(world, { coat: world.env.spring >= 0.5 ? "brown" : "white", force: !!force })
     if (kind === "golden") return Sim.spawnGolden(world)
     return false
   }
-  function freeze() { return world && live ? Sim.freezeNow(world) : -1 }
+  function freeze() { wake(); return world && live ? Sim.freezeNow(world) : -1 }
   // Calm mode came on (or surprises went off): whoever is here leaves now.
-  function dismissCritters() { return world ? Sim.dismissCritters(world) : false }
+  function dismissCritters() { wake(); return world ? Sim.dismissCritters(world) : false }
 
   // Faults a feature hit in the simulation or the paint (see Sim.fault and
   // Draw.layer), each printed once; `flurry diag` lists them.
@@ -902,6 +973,7 @@ PanelWindow {
   // A friend's snowball, flying in.
   function incomingSnowball(art) {
     if (!world || !live) return false
+    wake()
     return !!Sim.launchBall(world, art)
   }
 

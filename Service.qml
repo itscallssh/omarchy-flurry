@@ -526,13 +526,23 @@ Item {
   // only until a reading taken after the pointer set off shows it still
   // (see draw.js leadOf).
   property real windowsReadAt: 0
+  // Something moved or changed on the desktop: every scene resting its
+  // frame loop wakes (SceneWindow idle).
+  signal wakeScenes()
   function noteMotion() {
     var idle = Date.now() - root.lastMotion >= 2000
     root.lastMotion = Date.now()
+    root.dragActive = true
+    root.wakeScenes()
     // Waking from idle: poll fast at once instead of after the idle tick.
     if (idle && windowPoll.running) { windowPoll.interval = root.fastPoll; windowPoll.restart() }
     if (idle && cursorPoll.running) { cursorPoll.interval = root.fastPoll; cursorPoll.restart() }
   }
+  // A drag (or any window motion the events do not tell of) is under way:
+  // windows moved within the last two seconds, or the focused window moved
+  // under the pointer (takeCursorReply). Only then is the window list read
+  // on a timer; otherwise Hyprland's events say when to read it.
+  property bool dragActive: false
   readonly property bool active: root.loaded && root.saved.enabled
 
   // While something moves the list is read every frame (about 60 times a
@@ -557,14 +567,18 @@ Item {
   // between window polls right now (s): the scenes tell a drag from a jump
   // with these and the pointer.
   property real lastLayoutEvent: 0
-  readonly property real windowPollGap: windowPoll.interval / 1000
+  readonly property real windowPollGap: (windowPoll.running ? windowPoll.interval : root.pointerPoll) / 1000
   Timer {
     id: windowPoll
-    running: root.showing
+    running: root.showing && root.dragActive
     repeat: true
-    interval: root.idlePoll
+    interval: root.fastPoll
     onTriggered: {
       { Hyprland.refreshToplevels(); root.windowsReadAt = Date.now() }
+      var now = Date.now()
+      // The drag is over: no window has moved for two seconds and the
+      // pointer has not just set off.
+      if (now - root.lastMotion >= 2000 && now - root.lastSetOff >= 300) { root.dragActive = false; return }
       interval = root.pollInterval()
     }
   }
@@ -640,11 +654,17 @@ Item {
       }
       switch (name) {
       case "openwindow": case "closewindow": case "movewindowv2": case "changefloatingmode":
-      case "fullscreen": case "workspacev2": case "focusedmonv2": case "activewindowv2":
+      case "fullscreen": case "workspacev2": case "focusedmonv2":
       case "moveworkspacev2": case "activespecial": case "minimized":
         { Hyprland.refreshToplevels(); root.windowsReadAt = Date.now() }
         root.noteMotion()
         clientsSoon.restart()
+        break
+      case "activewindowv2":
+        // A focus change only restacks: one read of the list for the new
+        // order, nothing more (no fast poll, no hyprctl, no wake-up).
+        { Hyprland.refreshToplevels(); root.windowsReadAt = Date.now() }
+        break
       }
     }
   }
@@ -680,6 +700,11 @@ Item {
   // window really is, instead of trailing it as a line.
   property var focusSnap: null
   property int focusSeq: 0
+  Timer {
+    id: setOffRead
+    interval: 70
+    onTriggered: if (root.showing) { Hyprland.refreshToplevels(); root.windowsReadAt = Date.now() }
+  }
   // Older Hyprland that cannot answer the batch: the plain cursorpos.
   property bool cursorBatch: true
 
@@ -732,7 +757,12 @@ Item {
     }
     var now = Date.now()
     var k = r.win ? root.addrKey(r.win.address) : ""
+    var was = root.focusSnap
     root.focusSnap = k ? { id: "0x" + k, x: r.win.x, y: r.win.y, w: r.win.w, h: r.win.h, at: now } : null
+    // The focused window moved or changed size with no event: a drag (or a
+    // keyboard resize). Read the window list every frame while it lasts.
+    if (was && root.focusSnap && was.id === root.focusSnap.id
+        && (was.x !== r.win.x || was.y !== r.win.y || was.w !== r.win.w || was.h !== r.win.h)) root.noteMotion()
     root.focusSeq++
     root.takePointer(r.x, r.y)
     return true
@@ -872,13 +902,16 @@ Item {
       // Setting off after a rest is how every drag begins: read the windows
       // at once and every frame for a moment, so a dragged window's snow
       // starts moving with it a frame or two in, not a poll later.
-      if (p.stillFor > 0.08 && windowPoll.running) {
+      if (p.stillFor > 0.08 && root.showing) {
         root.lastSetOff = now
         { Hyprland.refreshToplevels(); root.windowsReadAt = Date.now() }
-        windowPoll.interval = root.fastPoll
-        windowPoll.restart()
+        // A drag may be starting (of the focused window, which the pointer
+        // feed itself follows, or of another): read again a moment later;
+        // a window found moving turns the drag poll on (noteMotion).
+        setOffRead.restart()
         if (cursorPoll.running) { cursorPoll.interval = root.fastPoll; cursorPoll.restart() }
       } else if (wasIdle && windowPoll.running) { windowPoll.interval = root.pointerPoll; windowPoll.restart() }
+      if (root.wantsPointer) root.wakeScenes()
     }
     root.cursor = {
       x: x, y: y,
@@ -1240,7 +1273,9 @@ Item {
     property real stamp: Date.now()
     interval: 30000
     repeat: true
-    running: root.active
+    // The scene's weather and light only matter while a scene shows; it is
+    // worked out afresh the moment one does.
+    running: root.showing
     triggeredOnStart: true
     onTriggered: { stamp = Date.now(); root.computeEnv() }
   }
