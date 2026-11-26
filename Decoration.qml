@@ -1,4 +1,5 @@
 import QtQuick
+import qs.Commons
 import "lib/draw.js" as Draw
 import "lib/sim.js" as Sim
 
@@ -75,11 +76,11 @@ Item {
   function wasSeen() {
     var seen = scene ? (scene.seenIds || {}) : {}
     var known = !!seen[item.id]
-    if (scene) { var next = Object.assign({}, seen); next[item.id] = true; scene.seenIds = next }
+    if (scene) { const next = Object.assign({}, seen); next[item.id] = true; scene.seenIds = next }
     return known
   }
 
-  NumberAnimation { id: grow; target: root; property: "growth"; from: 0; to: 1; duration: root.kind === "tree" ? 2400 : 1300; easing.type: Easing.OutCubic }
+  NumberAnimation { id: grow; target: root; property: "growth"; from: 0; to: 1; duration: Style.duration(root.kind === "tree" ? 2400 : 1300); easing.type: Easing.OutCubic }
   onGrowthChanged: canvas.requestPaint()
   onItemChanged: { firstLook(); canvas.requestPaint(); lights.requestPaint() }
   // Theme colours reach the scarf.
@@ -176,7 +177,7 @@ Item {
     var tool = scene.decorating ? scene.tool : ""
     if (kind === "tree" && (tool === "bauble" || tool === "light" || tool === "candy" || tool === "star")) {
       if (tool === "star") { scene.service.decorateTree(item.id, { kind: "star" }); return }
-      var at = Draw.ornamentAt(width, height, lx, ly)
+      const at = Draw.ornamentAt(width, height, lx, ly)
       if (at) scene.service.decorateTree(item.id, { kind: tool, u: at.u, v: at.v })
       return
     }
@@ -185,7 +186,7 @@ Item {
     if (kind === "snowman") { scene.service.dressSnowman(item.id); return }
     if (kind === "gift") {
       scene.service.openGift(item.id)
-      var who = item.from ? "From " + item.from + ": " : ""
+      const who = item.from ? "From " + item.from + ": " : ""
       scene.say(who + (item.note || "A little something for you."), p.x, root.y)
       return
     }

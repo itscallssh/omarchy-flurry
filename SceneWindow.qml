@@ -26,19 +26,25 @@ PanelWindow {
   // Whether a fullscreen app covers this screen. Read straight from
   // Hyprland, then applied a moment later: hiding the scene changes what
   // Hyprland reports in the same pass, and a direct binding would loop.
-  readonly property bool fullscreenNow: !!workspace && workspace.hasFullscreen && fullscreenMode() >= 2
+  readonly property bool fullscreenNow: !!workspace && fullscreenMode() >= 2
   property bool fullscreenApp: false
   onFullscreenNowChanged: Qt.callLater(syncFullscreen)
   function syncFullscreen() { if (fullscreenApp !== fullscreenNow) fullscreenApp = fullscreenNow }
   readonly property bool live: effectOn && !fullscreenApp
   readonly property bool busy: santa.running || yeti.mode !== "" || train.mode !== ""
 
-  // The ground sits above anything reserving the bottom of the screen.
-  readonly property real groundInset: {
-    var r = monitor && monitor.lastIpcObject && monitor.lastIpcObject.reserved ? monitor.lastIpcObject.reserved : [0, 0, 0, 0]
-    return Number(r[3]) || 0
-  }
+  // What the monitor reserves for the bar and any panels (hyprctl
+  // monitors `reserved`). The scene's surface is kept out of the top, left
+  // and right ones (margins below), so nothing it paints, no snow, no
+  // icicle, no visitor, ever covers the bar; the ground sits above the
+  // bottom one. Read again on monitor and layer events (Service.qml).
+  readonly property var reservedArea: Policy.reservedOf(monitor && monitor.lastIpcObject ? monitor.lastIpcObject.reserved : null,
+                                                        screen ? screen.width : 0, screen ? screen.height : 0)
+  readonly property real groundInset: reservedArea.bottom
   readonly property real groundY: height - groundInset
+  // The scene's top-left corner in Hyprland's global layout px.
+  readonly property real originX: (screen ? screen.x : 0) + reservedArea.left
+  readonly property real originY: (screen ? screen.y : 0) + reservedArea.top
 
   color: "transparent"
   // A visitor (Santa, the Yeti, a delivery) never shows over a fullscreen
@@ -47,20 +53,21 @@ PanelWindow {
   onVisibleChanged: if (service) service.sceneShown(screenName, visible)
   exclusionMode: ExclusionMode.Ignore
   anchors { top: true; bottom: true; left: true; right: true }
+  margins { top: sceneWin.reservedArea.top; left: sceneWin.reservedArea.left; right: sceneWin.reservedArea.right }
   WlrLayershell.namespace: "flurry"
   WlrLayershell.layer: WlrLayer.Top
   WlrLayershell.keyboardFocus: decorating ? WlrKeyboardFocus.Exclusive : WlrKeyboardFocus.None
 
   // Hyprland's fullscreen state of each window on this workspace; a real
   // fullscreen one (not just maximized) pauses the scene, simulation and all.
+  // The open special workspace counts too: a fullscreen app in the
+  // scratchpad covers the screen as much as one on the workspace below.
   function fullscreenMode() {
-    var modes = []
-    var list = workspace && workspace.toplevels ? workspace.toplevels.values : []
-    for (var i = 0; i < list.length; i++) {
-      var ipc = list[i].lastIpcObject
-      if (ipc && ipc.fullscreen) modes.push(Number(ipc.fullscreen))
-    }
-    return Policy.fullscreenActive(modes) ? 2 : 0
+    var mon = monitor && monitor.lastIpcObject ? monitor.lastIpcObject : null
+    var special = mon && mon.specialWorkspace && mon.specialWorkspace.id ? Number(mon.specialWorkspace.id) : 0
+    var all = Hyprland.toplevels.values, items = []
+    for (var i = 0; i < all.length; i++) items.push(all[i].lastIpcObject)
+    return Policy.fullscreenOn(items, workspace ? Number(workspace.id) : NaN, special) ? 2 : 0
   }
 
   // ------------------------------------------------------------ simulation
@@ -77,6 +84,9 @@ PanelWindow {
   function freshWorld() {
     var w = Sim.createWorld(width, height, { effect: service ? service.effect : "snow", intensity: service ? service.intensity : 1, groundInset: groundInset, plow: service ? service.plowOn : true })
     if (service) Sim.setEnv(w, service.env)
+    // One stash for every screen: a window moved to another monitor, or
+    // away to another workspace and back, keeps what lies on it.
+    if (service && service.sharedStash) w.shared = service.sharedStash
     return w
   }
   Component.onCompleted: {
@@ -101,6 +111,7 @@ PanelWindow {
   function recoverWorld() {
     console.warn("flurry: the scene on " + screenName + " kept failing; starting it afresh")
     try { Sim.letGo(world) } catch (e) { }
+    try { Sim.forgetWorld(world) } catch (e2) { }
     world = freshWorld()
     applyFeatures()
     anchorReset()
@@ -109,6 +120,9 @@ PanelWindow {
     canvas.requestPaint()
   }
   Component.onDestruction: {
+    // A monitor unplugged: its windows move to another screen, and what
+    // lies on them goes along (put aside in the shared stash for it).
+    if (world) Sim.forgetWorld(world, { stash: true })
     anchorReset()
     if (service) service.unregisterScene(screenName, sceneWin)
   }
@@ -119,11 +133,11 @@ PanelWindow {
 
   Connections {
     target: sceneWin.service
-    function onEffectChanged() { if (sceneWin.world) Sim.setEffect(sceneWin.world, sceneWin.service.effect) }
-    function onIntensityChanged() { if (sceneWin.world) Sim.setIntensity(sceneWin.world, sceneWin.service.intensity) }
-    function onPlowOnChanged() { if (sceneWin.world) Sim.setPlow(sceneWin.world, sceneWin.service.plowOn) }
-    function onEnvChanged() { if (sceneWin.world) Sim.setEnv(sceneWin.world, sceneWin.service.env) }
-    function onSavedChanged() { sceneWin.applyFeatures() }
+    function onEffectChanged() { if (sceneWin.world) Sim.setEffect(sceneWin.world, sceneWin.service.effect); sceneWin.wake() }
+    function onIntensityChanged() { if (sceneWin.world) Sim.setIntensity(sceneWin.world, sceneWin.service.intensity); sceneWin.wake() }
+    function onPlowOnChanged() { if (sceneWin.world) Sim.setPlow(sceneWin.world, sceneWin.service.plowOn); sceneWin.wake() }
+    function onEnvChanged() { if (sceneWin.world) Sim.setEnv(sceneWin.world, sceneWin.service.env); sceneWin.wake() }
+    function onSavedChanged() { sceneWin.applyFeatures(); sceneWin.wake() }
     function onThrowOnChanged() { sceneWin.applyFeatures() }
     function onWindowBorderChanged() { sceneWin.applyFeatures() }
     function onThemeChanged() { canvas.requestPaint() }
@@ -139,7 +153,9 @@ PanelWindow {
   // Yeti and the train carry things, so they finish their errand.)
   onEffectOnChanged: if (!effectOn && santa.running) { santa.running = false; santa.visible = false }
 
+  onStringSpecListChanged: wake()
   onLiveChanged: {
+    wake()
     if (live || !world) return
     // Off: nothing keeps falling in the background, and the canvas is cleared.
     world.particles = []
@@ -157,43 +173,33 @@ PanelWindow {
     return k ? "0x" + k : ""
   }
   function readWindows() {
-    var rects = []
-    if (!workspace || !service) return rects
-    var sx = screen ? screen.x : 0, sy = screen ? screen.y : 0
+    if (!workspace || !service) return []
     var mon = monitor && monitor.lastIpcObject ? monitor.lastIpcObject : null
-    var special = mon && mon.specialWorkspace && mon.specialWorkspace.id ? Number(mon.specialWorkspace.id) : 0
-    var wsId = Number(workspace.id)
     var all = Hyprland.toplevels.values
-    var seen = {}
+    var items = []
     for (var i = 0; i < all.length; i++) {
       var ipc = all[i].lastIpcObject
-      if (!ipc || !ipc.at || !ipc.size || ipc.hidden || ipc.mapped === false) continue
-      var ws = ipc.workspace ? Number(ipc.workspace.id) : NaN
-      // Its own workspace says where it is; Quickshell's lists can lag.
-      if (ws !== wsId && !(special && ws === special)) continue
-      var id = windowId(ipc, all[i])
-      if (!id || seen[id] || !service.windowExists(id)) continue
-      seen[id] = true
-      var x = Number(ipc.at[0]) - sx, y = Number(ipc.at[1]) - sy, w = Number(ipc.size[0]), h = Number(ipc.size[1])
-      if (!isFinite(x + y + w + h)) continue
-      rects.push({
-        id: id,
-        cls: String(ipc["class"] || ""),
-        x: x, y: y, w: w, h: h,
-        // The special workspace is shown over everything else.
-        floating: !!ipc.floating || (special > 0 && ws === special),
-        z: ipc.focusHistoryID === undefined ? 50 : Number(ipc.focusHistoryID)
-      })
+      if (ipc) items.push({ ipc: ipc, id: windowId(ipc, all[i]) })
     }
+    var rects = Policy.sceneRects(items, {
+      wsId: Number(workspace.id),
+      special: mon && mon.specialWorkspace && mon.specialWorkspace.id ? Number(mon.specialWorkspace.id) : 0,
+      ox: originX, oy: originY,
+      exists: function(id) { return service.windowExists(id) }
+    })
     // The focused window (the one a drag moves) is read from the pointer
     // feed's snapshot when that is fresher than the list: the list answers
     // a poll or two behind the compositor, and its snow would trail the
     // window. Every rect also says how old its reading is (age, s).
-    return Policy.withSnapshot(rects, service.focusSnap, Date.now(), sx, sy, service.windowsReadAt, 150)
+    return Policy.withSnapshot(rects, service.focusSnap, Date.now(), originX, originY, service.windowsReadAt, 150)
   }
 
   // Every window that still exists, on any workspace or monitor: their snow
-  // is kept aside while they are out of sight instead of falling.
+  // is kept aside while they are out of sight instead of falling. One that
+  // drops out of the toplevel list for a moment (a workspace switch can do
+  // that) counts as alive for a grace period, unless Hyprland said it
+  // closed (Policy.graceAlive).
+  property var aliveMemo: ({})
   function aliveIds() {
     var ids = []
     if (!service) return ids
@@ -202,13 +208,24 @@ PanelWindow {
       var id = windowId(all[i].lastIpcObject, all[i])
       if (id && service.windowExists(id)) ids.push(id)
     }
-    return ids
+    return Policy.graceAlive(aliveMemo, ids, Date.now(), Policy.ALIVE_GRACE_MS, function(k) { return service.windowWasClosed(k) })
+  }
+  // Alive, or out of the list only for a moment (see aliveIds): a snowman
+  // riding it stays on.
+  function windowAlive(id) {
+    if (!service || !id) return false
+    if (service.windowExists(id)) return true
+    var k = "0x" + service.addrKey(id)
+    return aliveMemo[k] !== undefined && Date.now() - aliveMemo[k] <= Policy.ALIVE_GRACE_MS && !service.windowWasClosed(k)
   }
 
   // True for a moment after any window here moved, so decorations riding
   // windows only run their sway while it can matter.
   property real lastSurfaceChange: -10
   readonly property bool windowsMoving: clock - lastSurfaceChange < 1.5
+  // When a window here last changed place or size (a focus change or a
+  // restacking does not count): a drag is that, with the pointer moving.
+  property real lastGeometryChange: -10
 
   // Windows seen on this screen this session, and where each was last, so
   // something riding a window that closes can be put down where it was.
@@ -223,7 +240,7 @@ PanelWindow {
     var p = service.pointer
     var now = Date.now()
     return {
-      pointer: p.present ? { x: p.x - (screen ? screen.x : 0), y: p.y - (screen ? screen.y : 0), vx: p.vx, vy: p.vy,
+      pointer: p.present ? { x: p.x - originX, y: p.y - originY, vx: p.vx, vy: p.vy,
                              present: true, stillFor: p.stillFor + (p.at ? Math.max(0, now - p.at) / 1000 : 0) } : null,
       poll: service.windowPollGap,
       layoutAge: service.lastLayoutEvent ? (now - service.lastLayoutEvent) / 1000 : 1e9
@@ -245,7 +262,9 @@ PanelWindow {
   property int focusSeqSeen: 0
   function syncWindows() {
     var rects = readWindows()
-    var sig = rects.map(function(r) { return [r.id, r.x, r.y, r.w, r.h, r.floating ? 1 : 0, r.z].join(",") }).join(";")
+    // In id order: the toplevel list's own order says nothing about the
+    // windows, and a reordering alone must not read as motion.
+    var sig = rects.map(function(r) { return [r.id, r.x, r.y, r.w, r.h, r.floating ? 1 : 0, r.z].join(",") }).sort().join(";")
     // A fresh snapshot that shows the focused window where it was: it has
     // stopped, so its snow is painted where it is (see draw.js leadOf).
     var snap = service.focusSeq !== focusSeqSeen ? service.focusSnap : null
@@ -255,8 +274,14 @@ PanelWindow {
       return
     }
     if (surfaceSig !== "") service.noteMotion()
+    wake()
     var gone = surfaceSig !== "" && rects.length < windowRects.length
     surfaceSig = sig
+    // A window really moved or changed size (not just focus or stacking).
+    for (var g = 0; g < rects.length; g++) {
+      var was = lastRects[rects[g].id]
+      if (was && (was.x !== rects[g].x || was.y !== rects[g].y || was.w !== rects[g].w || was.h !== rects[g].h)) { lastGeometryChange = clock; break }
+    }
     windowRects = rects
     lastSurfaceChange = clock
     Sim.setSurfaces(world, rects, clock, aliveIds(), motionHint())
@@ -269,33 +294,97 @@ PanelWindow {
     if (gone || rects.length) checkRiders()
   }
 
+  // ------------------------------------------------------------ idle
+  //
+  // The clock is real time: what the frame loop saw pass, and what passed
+  // while it rested (a long frame, an idle spell, a suspend). The simulation
+  // takes at most 0.1 s of it a frame, in ordinary steps (Sim.advance), so
+  // nothing jumps when the machine wakes.
+  property real lastFrameMs: 0
+  function realDt() {
+    var now = Date.now()
+    var d = lastFrameMs > 0 ? (now - lastFrameMs) / 1000 : 0
+    lastFrameMs = now
+    return isFinite(d) && d > 0 ? d : 0
+  }
+  // A scene with nothing moving (Sim.quiet: no snow falling, nothing in
+  // the air or sliding, no visitor, no window moving) rests its frame loop
+  // after a moment, and looks in once a second instead: it reads the
+  // windows, steps the slow things (a thaw, icicles) through the second in
+  // one go and paints once. Anything that starts something wakes it at once
+  // (wake()): a window event or drag, the pointer, a visitor, a switch.
+  readonly property bool wantsFrames: live || busy || decorating
+  property bool idle: false
+  property real quietFor: 0
+  function wake() {
+    quietFor = 0
+    if (!idle) return
+    idle = false
+  }
+  function noteQuiet(dt) {
+    var still = live && !busy && !decorating && !windowsMoving && clock - shakeAt > 3
+                && !snowHands.pressed && Sim.quiet(world)
+    quietFor = still ? quietFor + dt : 0
+    if (quietFor > 1.5) idle = true
+  }
+  onWantsFramesChanged: wake()
+  onBusyChanged: wake()
+  onDecoratingChanged: wake()
+  Connections {
+    target: sceneWin.service
+    function onWakeScenes() { sceneWin.wake() }
+    function onWindowOpenedAt(id) { if (sceneWin.world && sceneWin.live) { Sim.noteOpened(sceneWin.world, id); sceneWin.wake() } }
+  }
+  Timer {
+    id: idleLook
+    interval: 1000
+    repeat: true
+    running: sceneWin.visible && sceneWin.wantsFrames && sceneWin.idle
+    onTriggered: {
+      var real = sceneWin.realDt()
+      sceneWin.clock += real
+      sceneWin.syncWindows()
+      if (!sceneWin.live || !sceneWin.world) return
+      try { Sim.advance(sceneWin.world, Math.min(real, 2), { pointer: null }) } catch (e) { sceneWin.noteFault("step", e) }
+      var sounds = Sim.takeSounds(sceneWin.world)
+      for (var q = 0; q < sounds.length; q++) sceneWin.service.playCue(sounds[q])
+      var events = Sim.takeEvents(sceneWin.world)
+      for (var e2 = 0; e2 < events.length; e2++) {
+        if (events[e2].type === "yank") sceneWin.dropRiders(events[e2])
+        else sceneWin.service.sceneEvent(sceneWin, events[e2])
+      }
+      canvas.requestPaint()
+      sceneWin.anchorTick()
+      if (!Sim.quiet(sceneWin.world)) sceneWin.wake()
+    }
+  }
+
   FrameAnimation {
     id: frames
-    running: sceneWin.visible && (sceneWin.live || sceneWin.busy || sceneWin.decorating)
+    running: sceneWin.visible && sceneWin.wantsFrames && !sceneWin.idle
     onTriggered: {
-      // A long frame (a suspend, a stall) counts as an ordinary one, so
-      // nothing jumps when the machine wakes.
-      var dt = Math.min(Math.max(frameTime, 0), 0.1)
-      sceneWin.clock += dt
+      var real = sceneWin.realDt()
+      sceneWin.clock += real
+      var dt = Math.min(real, 0.1)
       // On battery the scene draws at 30 fps (24 when it runs low).
       if (sceneWin.service.fpsCap < 60) {
         sceneWin.frameDebt += dt
         if (sceneWin.frameDebt < 1 / sceneWin.service.fpsCap) return
-        dt = sceneWin.frameDebt
+        dt = Math.min(sceneWin.frameDebt, 0.1)
         sceneWin.frameDebt = 0
       }
       sceneWin.syncWindows()
       if (sceneWin.live) {
         sceneWin.world.quality = sceneWin.service.quality
         var p = sceneWin.service.pointer
-        var sx = sceneWin.screen ? sceneWin.screen.x : 0, sy = sceneWin.screen ? sceneWin.screen.y : 0
+        var sx = sceneWin.originX, sy = sceneWin.originY
         var local = p.present ? { x: p.x - sx, y: p.y - sy, vx: p.vx, vy: p.vy,
                                   present: p.x >= sx && p.x < sx + sceneWin.width
                                         && p.y >= sy && p.y < sy + sceneWin.height,
                                   stillFor: p.stillFor, age: p.at ? Math.max(0, Date.now() - p.at) / 1000 : 0 } : null
         Sim.setStrings(sceneWin.world, sceneWin.stringSpecList)
         try {
-          Sim.step(sceneWin.world, dt, { pointer: local })
+          Sim.advance(sceneWin.world, dt, { pointer: local })
           sceneWin.stepFailures = 0
         } catch (e) {
           sceneWin.noteFault("step", e)
@@ -319,6 +408,7 @@ PanelWindow {
         }
         canvas.requestPaint()
         sceneWin.anchorTick()
+        sceneWin.noteQuiet(real)
       }
       sceneWin.stepVisitors(dt)
     }
@@ -342,7 +432,7 @@ PanelWindow {
   property bool ballsMoving: false
 
   Timer {
-    interval: sceneWin.ballsMoving ? 50 : 200
+    interval: sceneWin.ballsMoving ? 50 : (sceneWin.idle ? 1000 : 200)
     repeat: true
     running: sceneWin.snowballsOn
     onTriggered: {
@@ -371,6 +461,7 @@ PanelWindow {
     // Ctrl+drag writes in the snow instead of scooping it.
     property bool writing: false
     onPressed: function(mouse) {
+      sceneWin.wake()
       if (Sim.goldenAt(sceneWin.world, mouse.x, mouse.y)) { Sim.catchGolden(sceneWin.world); return }
       writing = false
       if ((mouse.modifiers & Qt.ControlModifier) && sceneWin.service.saved.writing) {
@@ -445,7 +536,12 @@ PanelWindow {
     var toClear = [], filesToDelete = []
     for (var i = 0; i < gone.length; i++) {
       var id = gone[i]
-      if (!service || !service.sceneShowing(id)) {
+      // Cleared unless another screen's live scene shows the window now.
+      // (This scene's own windows count as not shown: it is letting go of
+      // them, going under a fullscreen app or switching the plugin off.
+      // Asking sceneShowing alone found this scene and cleared nothing,
+      // so a window's icicles and frost stayed drawn over a fullscreen app.)
+      if (!service || !service.sceneShowing(id, sceneWin)) {
         toClear.push(Policy.anchorClear(id))
         if (anchorActiveFiles[id]) filesToDelete = filesToDelete.concat(anchorActiveFiles[id])
       }
@@ -478,7 +574,7 @@ PanelWindow {
       for (var g = 0; g < gone.length; g++) {
         var gid = gone[g]
         delete held[gid]; delete anchorSigs[gid]; delete anchorAt[gid]
-        if (!service.sceneShowing(gid)) {
+        if (!service.sceneShowing(gid, sceneWin)) {
           clearCmds.push(Policy.anchorClear(gid))
           if (anchorActiveFiles[gid]) filesToDelete = filesToDelete.concat(anchorActiveFiles[gid])
         }
@@ -527,7 +623,14 @@ PanelWindow {
     service.anchorSend(Policy.anchorBatch(cmds), cmds.length, function(text) {
       var ok = Policy.anchorReplies(String(text || ""), cmds.length)
       if (sceneWin.anchorJob && sceneWin.anchorJob.seq === jobSeq) sceneWin.anchorJob = null
-      if (!sceneWin.anchorOn) { sceneWin.cleanupAnchorFiles(files); return }
+      if (!sceneWin.anchorOn) {
+        // Switched off (or hidden) while this set was on its way: the
+        // plugin took it, so it is cleared again, not left on the window.
+        if (!sceneWin.service.sceneShowing(id, sceneWin) && sceneWin.service.anchorAvailable)
+          sceneWin.service.anchorSend(Policy.anchorBatch([Policy.anchorClear(id)]), 1, null)
+        sceneWin.cleanupAnchorFiles(files)
+        return
+      }
       if (ok.every(function(v) { return v })) {
         var prev = sceneWin.anchorActiveFiles[id] || []
         var stale = prev.filter(function(p) { return files.indexOf(p) < 0 })
@@ -672,7 +775,7 @@ PanelWindow {
     for (var i = 0; i < list.length; i++) {
       var m = list[i], pl = m.place
       if (pl.screen !== screenName || (!pl.windowAddress && !pl.windowClass)) continue
-      if (pl.windowAddress && service.windowExists(pl.windowAddress)) {
+      if (pl.windowAddress && windowAlive(pl.windowAddress)) {
         // Its window went to another monitor: it goes along.
         if (!rectFor(pl.windowAddress)) {
           var other = service.sceneShowing(pl.windowAddress)
@@ -804,13 +907,14 @@ PanelWindow {
   // ------------------------------------------------------------ visitors
 
   // "sent", "off" (the switch is off) or "out" (one is already on its way).
-  function callPlow() { return world ? Sim.requestPlow(world) : "no screen" }
+  function callPlow() { wake(); return world ? Sim.requestPlow(world) : "no screen" }
 
   // The snow globe: everything lying about lifts and swirls, and the
   // decorations rock.
   property real shakeAt: -10
   function shake() {
     if (!world || !live) return false
+    wake()
     Sim.shake(world, 1)
     shakeAt = clock
     return true
@@ -818,9 +922,10 @@ PanelWindow {
 
   function startFireworks(seconds) {
     if (!world || !live) return false
+    wake()
     return Sim.startFireworks(world, seconds)
   }
-  function countdownTick(n) { if (world && live) Sim.countdownTick(world, n) }
+  function countdownTick(n) { if (world && live) { wake(); Sim.countdownTick(world, n) } }
 
   // What the visitors would find here now, for the scheduler and `flurry
   // diag` (see Sim.critterContext and Policy.surpriseBlock).
@@ -831,21 +936,27 @@ PanelWindow {
     c.fullscreen = fullscreenApp
     // A window being dragged (or anything moved in the last moment and the
     // pointer is moving): nothing lands on a moving target.
-    c.dragging = windowsMoving && !!service && Date.now() - service.lastPointerMove < 1500
+    // Only a real drag: a window changing place in the last half second
+    // while the pointer moves. (It used to be any change to the window list
+    // in the last 1.5 s, focus and stacking included, with the pointer
+    // moved in the last 1.5 s: with focus following the mouse that held
+    // the visitors off for as long as the mouse was in use.)
+    c.dragging = clock - lastGeometryChange < 0.5 && !!service && Date.now() - service.lastPointerMove < 500
     return c
   }
   // force: a named call (`flurry surprise rabbit`), which comes even with
   // the plow out.
   function surprise(kind, force) {
     if (!world || !live) return false
+    wake()
     if (kind === "bird") return Sim.spawnBird(world)
     if (kind === "rabbit") return Sim.spawnRabbit(world, { coat: world.env.spring >= 0.5 ? "brown" : "white", force: !!force })
     if (kind === "golden") return Sim.spawnGolden(world)
     return false
   }
-  function freeze() { return world && live ? Sim.freezeNow(world) : -1 }
+  function freeze() { wake(); return world && live ? Sim.freezeNow(world) : -1 }
   // Calm mode came on (or surprises went off): whoever is here leaves now.
-  function dismissCritters() { return world ? Sim.dismissCritters(world) : false }
+  function dismissCritters() { wake(); return world ? Sim.dismissCritters(world) : false }
 
   // Faults a feature hit in the simulation or the paint (see Sim.fault and
   // Draw.layer), each printed once; `flurry diag` lists them.
@@ -877,6 +988,7 @@ PanelWindow {
   // A friend's snowball, flying in.
   function incomingSnowball(art) {
     if (!world || !live) return false
+    wake()
     return !!Sim.launchBall(world, art)
   }
 

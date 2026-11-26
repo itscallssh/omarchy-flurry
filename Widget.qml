@@ -1,3 +1,4 @@
+pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Layouts
 import Quickshell
@@ -233,12 +234,19 @@ BarWidget {
 
   // ------------------------------------------------------------ panel
 
-  PopupCard {
+  // A KeyboardPanel, not a PopupCard: a PopupCard is an xdg-popup of the
+  // bar, whose layer surface never takes the keyboard, so it gets no keys
+  // and nothing could be typed into the city or name fields (the World
+  // section's city search did nothing at all). KeyboardPanel takes the
+  // keyboard while it is open, as the shell's own panels with text fields
+  // (weather, clock, network) do.
+  KeyboardPanel {
     id: popup
     anchorItem: root
     bar: root.bar
     owner: root
     open: root.popupOpen
+    focusTarget: flick
     contentWidth: popup.fittedContentWidth(Style.space(380))
     contentHeight: popup.fittedContentHeight(root.service ? body.implicitHeight : missingNote.implicitHeight)
 
@@ -548,11 +556,12 @@ BarWidget {
             note: root.saved.liveWeather && root.saved.weatherPlace ? root.saved.weatherPlace : ""
           }
           TextField {
+            id: cityField
             Layout.fillWidth: true
             visible: !!root.saved.liveWeather
             placeholderText: strings.t("city.placeholder")
             maximumLength: 80
-            onAccepted: { if (text.trim() !== "") { root.service.setWeatherCity(text); text = "" } }
+            onAccepted: { if (cityField.text.trim() !== "") { root.service.setWeatherCity(cityField.text); cityField.text = "" } }
           }
           PlainText {
             Layout.fillWidth: true
@@ -645,8 +654,8 @@ BarWidget {
               text: root.service && root.service.identity ? root.service.identity.name : ""
               maximumLength: 40
               onAccepted: {
-                var n = text.trim()
-                if (n !== "" && root.service) { root.service.setupFriends(n); focus = false }
+                var n = nameField.text.trim()
+                if (n !== "" && root.service) { root.service.setupFriends(n); nameField.focus = false }
               }
             }
           }
@@ -659,8 +668,9 @@ BarWidget {
           Repeater {
             model: root.service ? root.service.friends : []
             delegate: BorderSurface {
+              id: friendItem
               required property var modelData
-              readonly property bool isThrowTarget: !!root.service && !!root.service.throwFriend && root.service.throwFriend.id === modelData.id
+              readonly property bool isThrowTarget: !!root.service && !!root.service.throwFriend && root.service.throwFriend.id === friendItem.modelData.id
               Layout.fillWidth: true
               implicitHeight: friendRow.implicitHeight + Style.space(16)
               radius: Style.cornerRadius
@@ -671,20 +681,20 @@ BarWidget {
                 anchors { left: parent.left; right: parent.right; verticalCenter: parent.verticalCenter; leftMargin: Style.space(12); rightMargin: Style.space(6) }
                 spacing: Style.space(6)
                 PlainText { text: root.glyph("gift"); font.pixelSize: Style.font.icon; opacity: 0.7 }
-                PlainText { Layout.fillWidth: true; text: modelData.name; elide: Text.ElideRight; font.bold: true }
+                PlainText { Layout.fillWidth: true; text: friendItem.modelData.name; elide: Text.ElideRight; font.bold: true }
                 Button {
                   iconText: root.glyph("snowball")
                   tooltipText: strings.t("friends.throwTarget")
-                  opacity: isThrowTarget ? 1 : 0.45
-                  onClicked: root.service.setThrowTarget(modelData.id)
+                  opacity: friendItem.isThrowTarget ? 1 : 0.45
+                  onClicked: root.service.setThrowTarget(friendItem.modelData.id)
                 }
                 Button {
                   iconText: root.glyph("send")
                   tooltipText: strings.t("friends.sendNote")
                   enabled: noteField.text.trim() !== ""
                   onClicked: {
-                    if (root.service.sendNote(modelData.id, noteField.text)) {
-                      root.friendNote = strings.t("friends.noteSent").arg(modelData.name)
+                    if (root.service.sendNote(friendItem.modelData.id, noteField.text)) {
+                      root.friendNote = strings.t("friends.noteSent").arg(friendItem.modelData.name)
                       noteField.text = ""
                     } else {
                       root.friendNote = strings.t("friends.noteFailed")
@@ -694,7 +704,7 @@ BarWidget {
                 Button {
                   iconText: root.glyph("remove")
                   tooltipText: strings.t("friends.remove")
-                  onClicked: root.service.removeFriend(modelData.id)
+                  onClicked: root.service.removeFriend(friendItem.modelData.id)
                 }
               }
             }
@@ -706,12 +716,12 @@ BarWidget {
             placeholderText: strings.t("friends.notePlaceholder")
             maximumLength: 280
             onAccepted: {
-              var txt = text.trim()
+              var txt = noteField.text.trim()
               var target = root.service ? (root.service.throwFriend || root.service.friends[0]) : null
               if (!txt || !target) return
               if (root.service.sendNote(target.id, txt)) {
                 root.friendNote = strings.t("friends.noteSent").arg(target.name)
-                text = ""
+                noteField.text = ""
               } else {
                 root.friendNote = strings.t("friends.noteFailed")
               }

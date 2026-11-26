@@ -1,3 +1,4 @@
+pragma ComponentBehavior: Bound
 import QtQuick
 import Quickshell
 import Quickshell.Hyprland
@@ -12,6 +13,7 @@ import "lib/theme.js" as Theme
 import "lib/policy.js" as Policy
 import "lib/sound.js" as Snd
 import "lib/draw.js" as Draw
+import "lib/sim.js" as Sim
 
 // Flurry's headless core. Owns the saved state, the per-screen scenes, the
 // window and pointer feeds the simulation reads, the visitors' schedule, and
@@ -178,6 +180,9 @@ Item {
   // Each scene reports in, so the service can hand a visitor or a delivery to
   // the screen that should show it.
   property var scenes: ({})
+  // What lies on windows out of sight (another workspace, another
+  // monitor), shared by every screen's world (Sim.stashSurface).
+  readonly property var sharedStash: Sim.sharedStash()
   function registerScene(name, scene) {
     var next = Object.assign({}, root.scenes); next[name] = scene; root.scenes = next
   }
@@ -199,6 +204,16 @@ Item {
     if (shown) next[name] = true; else delete next[name]
     root.shownScenes = next
   }
+  // The focused screen's scene when it is live (shown, not under a
+  // fullscreen app), else any live one: a visitor goes where it can be
+  // seen, and a fullscreen app on the focused monitor does not keep them
+  // away from the other.
+  function liveScene() {
+    var f = focusedScene()
+    if (f && f.live) return f
+    for (var k in root.scenes) if (root.scenes[k].live) return root.scenes[k]
+    return f
+  }
   function focusedScene() {
     var m = Hyprland.focusedMonitor
     if (m && root.scenes[m.name]) return root.scenes[m.name]
@@ -206,8 +221,11 @@ Item {
     return null
   }
   // The scene whose screen shows this window now, if any.
-  function sceneShowing(addr) {
-    for (var k in root.scenes) if (root.scenes[k].rectFor && root.scenes[k].rectFor(addr)) return root.scenes[k]
+  function sceneShowing(addr, except) {
+    for (var k in root.scenes) {
+      var sc = root.scenes[k]
+      if (sc && sc !== except && sc.rectFor && sc.rectFor(addr)) return sc
+    }
     return null
   }
   function sceneForPlace(place) {
@@ -392,6 +410,12 @@ Item {
     if (!k || root.closedWindows[k]) return false
     return root.liveWindows === null || root.liveWindows[k] === true
   }
+  // Whether Hyprland said this window closed (and no new window has
+  // opened at its address since).
+  function windowWasClosed(addr) {
+    var k = addrKey(addr)
+    return !!k && !!root.closedWindows[k]
+  }
   function windowClosed(addr) {
     var k = addrKey(addr)
     if (!k) return
@@ -411,6 +435,7 @@ Item {
     }
     root.windowEpoch++
   }
+  signal windowOpenedAt(string id)
   function windowOpened(addr) {
     var k = addrKey(addr)
     if (!k) return
@@ -420,6 +445,8 @@ Item {
       delete next[k]
       root.closedWindows = next
     }
+    // The scenes jostle the ledges around it when it shows up.
+    root.windowOpenedAt("0x" + k)
     // It exists from now on, before the next `hyprctl clients` says so.
     if (root.liveWindows && !root.liveWindows[k]) {
       var live = Object.assign({}, root.liveWindows)
@@ -506,13 +533,23 @@ Item {
   // only until a reading taken after the pointer set off shows it still
   // (see draw.js leadOf).
   property real windowsReadAt: 0
+  // Something moved or changed on the desktop: every scene resting its
+  // frame loop wakes (SceneWindow idle).
+  signal wakeScenes()
   function noteMotion() {
     var idle = Date.now() - root.lastMotion >= 2000
     root.lastMotion = Date.now()
+    root.dragActive = true
+    root.wakeScenes()
     // Waking from idle: poll fast at once instead of after the idle tick.
     if (idle && windowPoll.running) { windowPoll.interval = root.fastPoll; windowPoll.restart() }
     if (idle && cursorPoll.running) { cursorPoll.interval = root.fastPoll; cursorPoll.restart() }
   }
+  // A drag (or any window motion the events do not tell of) is under way:
+  // windows moved within the last two seconds, or the focused window moved
+  // under the pointer (takeCursorReply). Only then is the window list read
+  // on a timer; otherwise Hyprland's events say when to read it.
+  property bool dragActive: false
   readonly property bool active: root.loaded && root.saved.enabled
 
   // While something moves the list is read every frame (about 60 times a
@@ -537,14 +574,18 @@ Item {
   // between window polls right now (s): the scenes tell a drag from a jump
   // with these and the pointer.
   property real lastLayoutEvent: 0
-  readonly property real windowPollGap: windowPoll.interval / 1000
+  readonly property real windowPollGap: (windowPoll.running ? windowPoll.interval : root.pointerPoll) / 1000
   Timer {
     id: windowPoll
-    running: root.showing
+    running: root.showing && root.dragActive
     repeat: true
-    interval: root.idlePoll
+    interval: root.fastPoll
     onTriggered: {
       { Hyprland.refreshToplevels(); root.windowsReadAt = Date.now() }
+      var now = Date.now()
+      // The drag is over: no window has moved for two seconds and the
+      // pointer has not just set off.
+      if (now - root.lastMotion >= 2000 && now - root.lastSetOff >= 300) { root.dragActive = false; return }
       interval = root.pollInterval()
     }
   }
@@ -554,7 +595,11 @@ Item {
   // config; nothing polls it.
   property int windowBorder: 2
   property bool borderRead: false
-  onShowingChanged: if (showing && !borderRead) readBorder()
+  onShowingChanged: {
+    if (!showing) return
+    if (!borderRead) readBorder()
+    Hyprland.refreshMonitors()
+  }
   function readBorder() {
     borderRead = true
     if (borderProc.running) return
@@ -587,6 +632,22 @@ Item {
       var name = String(event.name)
       if (name === "configreloaded") root.readBorder()
       if (!root.showing) return
+      // Monitors and what they reserve (the bar, panels): the scenes keep
+      // out of the reserved areas and stand the ground above the bottom one,
+      // so they are read again whenever those can have changed (and when
+      // the scenes show again). Quickshell fills
+      // HyprlandMonitor.lastIpcObject only on refreshMonitors().
+      switch (name) {
+      case "monitoradded": case "monitoraddedv2": case "monitorremoved": case "monitorremovedv2":
+      case "configreloaded": case "openlayer": case "closelayer":
+        monitorsSoon.restart()
+        break
+      case "activespecial": case "activespecialv2":
+        // Which special workspace a monitor shows is read from its
+        // lastIpcObject, which only refreshMonitors() fills: read it now,
+        // or the scratchpad's windows keep (or never get) their ledges.
+        Hyprland.refreshMonitors()
+      }
       switch (name) {
       case "closewindow":
         root.windowClosed(String(event.data).split(",")[0])
@@ -601,18 +662,32 @@ Item {
       // Focus changes are left out: clicking a window to drag it is one.
       case "openwindow": case "closewindow": case "movewindowv2": case "changefloatingmode":
       case "fullscreen": case "workspacev2": case "focusedmonv2": case "moveworkspacev2":
-      case "activespecial": case "minimized":
+      case "activespecial": case "activespecialv2": case "minimized":
         root.lastLayoutEvent = Date.now()
       }
       switch (name) {
       case "openwindow": case "closewindow": case "movewindowv2": case "changefloatingmode":
-      case "fullscreen": case "workspacev2": case "focusedmonv2": case "activewindowv2":
-      case "moveworkspacev2": case "activespecial": case "minimized":
+      case "fullscreen": case "workspacev2": case "focusedmonv2":
+      case "moveworkspacev2": case "activespecial": case "activespecialv2": case "minimized":
         { Hyprland.refreshToplevels(); root.windowsReadAt = Date.now() }
         root.noteMotion()
         clientsSoon.restart()
+        break
+      case "activewindowv2":
+        // A focus change only restacks: one read of the list for the new
+        // order, nothing more (no fast poll, no hyprctl, no wake-up).
+        { Hyprland.refreshToplevels(); root.windowsReadAt = Date.now() }
+        break
       }
     }
+  }
+
+  // Layer events come in bursts (a bar reloading opens a layer per
+  // monitor), so the monitors are read once after the burst.
+  Timer {
+    id: monitorsSoon
+    interval: 120
+    onTriggered: Hyprland.refreshMonitors()
   }
 
   // ---------------------------------------------------------- pointer feed
@@ -638,6 +713,11 @@ Item {
   // window really is, instead of trailing it as a line.
   property var focusSnap: null
   property int focusSeq: 0
+  Timer {
+    id: setOffRead
+    interval: 70
+    onTriggered: if (root.showing) { Hyprland.refreshToplevels(); root.windowsReadAt = Date.now() }
+  }
   // Older Hyprland that cannot answer the batch: the plain cursorpos.
   property bool cursorBatch: true
 
@@ -690,7 +770,12 @@ Item {
     }
     var now = Date.now()
     var k = r.win ? root.addrKey(r.win.address) : ""
+    var was = root.focusSnap
     root.focusSnap = k ? { id: "0x" + k, x: r.win.x, y: r.win.y, w: r.win.w, h: r.win.h, at: now } : null
+    // The focused window moved or changed size with no event: a drag (or a
+    // keyboard resize). Read the window list every frame while it lasts.
+    if (was && root.focusSnap && was.id === root.focusSnap.id
+        && (was.x !== r.win.x || was.y !== r.win.y || was.w !== r.win.w || was.h !== r.win.h)) root.noteMotion()
     root.focusSeq++
     root.takePointer(r.x, r.y)
     return true
@@ -830,13 +915,16 @@ Item {
       // Setting off after a rest is how every drag begins: read the windows
       // at once and every frame for a moment, so a dragged window's snow
       // starts moving with it a frame or two in, not a poll later.
-      if (p.stillFor > 0.08 && windowPoll.running) {
+      if (p.stillFor > 0.08 && root.showing) {
         root.lastSetOff = now
         { Hyprland.refreshToplevels(); root.windowsReadAt = Date.now() }
-        windowPoll.interval = root.fastPoll
-        windowPoll.restart()
+        // A drag may be starting (of the focused window, which the pointer
+        // feed itself follows, or of another): read again a moment later;
+        // a window found moving turns the drag poll on (noteMotion).
+        setOffRead.restart()
         if (cursorPoll.running) { cursorPoll.interval = root.fastPoll; cursorPoll.restart() }
       } else if (wasIdle && windowPoll.running) { windowPoll.interval = root.pointerPoll; windowPoll.restart() }
+      if (root.wantsPointer) root.wakeScenes()
     }
     root.cursor = {
       x: x, y: y,
@@ -1198,7 +1286,9 @@ Item {
     property real stamp: Date.now()
     interval: 30000
     repeat: true
-    running: root.active
+    // The scene's weather and light only matter while a scene shows; it is
+    // worked out afresh the moment one does.
+    running: root.showing
     triggeredOnStart: true
     onTriggered: { stamp = Date.now(); root.computeEnv() }
   }
@@ -1281,12 +1371,9 @@ Item {
     if (!root.weatherWanted || geoProc.running || weatherProc.running) return
     if (!root.weatherPlaced) {
       if (!root.saved.weatherCity || root.saved.weatherCity === root.missingCity) return
-      var gurl = Weather.geocodeUrl(root.saved.weatherCity)
-      if (!gurl) return
-      root.weatherStatus = "loading"
-      geoProc.collector = Policy.newCollector(Weather.MAX_RESPONSE_BYTES)
-      geoProc.command = weatherCurlArgs(gurl)
-      geoProc.running = true
+      geoProc.langs = Weather.geocodeLanguages(Weather.cityParts(root.saved.weatherCity).name)
+      geoProc.lang = 0
+      root.geocodeNext()
       return
     }
     var furl = Weather.forecastUrl(root.saved.weatherLat, root.saved.weatherLon)
@@ -1295,6 +1382,18 @@ Item {
     weatherProc.collector = Policy.newCollector(Weather.MAX_RESPONSE_BYTES)
     weatherProc.command = weatherCurlArgs(furl)
     weatherProc.running = true
+  }
+  // Ask the geocoder in the next language for the name's script (see
+  // Weather.geocodeLanguages).
+  function geocodeNext() {
+    var gurl = Weather.geocodeUrl(root.saved.weatherCity, geoProc.langs[geoProc.lang])
+    if (!gurl) return false
+    root.weatherStatus = "loading"
+    geoProc.city = root.saved.weatherCity
+    geoProc.collector = Policy.newCollector(Weather.MAX_RESPONSE_BYTES)
+    geoProc.command = weatherCurlArgs(gurl)
+    geoProc.running = true
+    return true
   }
   function weatherFailed() {
     root.weatherFailures++
@@ -1305,6 +1404,9 @@ Item {
   Process {
     id: geoProc
     property var collector: Policy.newCollector(Weather.MAX_RESPONSE_BYTES)
+    property var langs: ["en"]
+    property int lang: 0
+    property string city: ""        // the city this request is for
     stdout: SplitParser {
       splitMarker: ""
       onRead: function(chunk) {
@@ -1319,8 +1421,11 @@ Item {
       var c = geoProc.collector
       geoProc.collector = Policy.newCollector(Weather.MAX_RESPONSE_BYTES)
       if (code !== 0 || c.overflowed) { root.weatherFailed(); return }
-      var res = Weather.parseGeocodeStatus(c.buf)
+      // The city was changed while this was on its way: ask about the new one.
+      if (geoProc.city !== root.saved.weatherCity) { weatherSoon.restart(); return }
+      var res = Weather.parseGeocodeStatus(c.buf, Weather.cityParts(geoProc.city).hint)
       if (res.status === "error") { root.weatherFailed(); return }
+      if (res.status === "not_found" && geoProc.lang + 1 < geoProc.langs.length) { geoProc.lang++; Qt.callLater(root.geocodeNext); return }
       if (res.status === "not_found") {
         root.missingCity = root.saved.weatherCity
         root.weatherStatus = "not_found"
@@ -1523,25 +1628,44 @@ Item {
     return c
   }
 
+  // The schedule is kept as a time (surpriseNextAt), checked every few
+  // seconds while Flurry shows, rather than as a one-shot Timer restarted
+  // from its own onTriggered: that timer started again from zero whenever
+  // the scenes hid and showed (a fullscreen app, a visitor's errand, the
+  // panel's switches), and a restart() made inside onTriggered could be
+  // undone by Qt finishing the one-shot run, so on a busy desktop the
+  // robin and the hare could wait forever. Now the time only moves when a
+  // visit comes, misses (looked at again in 15 s) or the scenes first show.
   Timer {
     id: surpriseTimer
     running: root.showing && root.saved.surprises
-    interval: Policy.planSurprise([], Date.now(), {}, Math.random, { first: true }).delay
-    onRunningChanged: if (running) root.surpriseNextAt = Date.now() + interval
+    repeat: true
+    interval: Policy.SURPRISE.check
+    onRunningChanged: {
+      if (!running) return
+      var now = Date.now()
+      // Back after a long time away (or the first time): the first visit
+      // comes within a minute or two, as when Flurry starts.
+      if (root.surpriseNextAt <= 0 || root.surpriseNextAt - now > Policy.SURPRISE.minGap + Policy.SURPRISE.spread
+          || now - root.surpriseNextAt > 10 * 60000)
+        root.surpriseNextAt = now + Policy.planSurprise(root.surpriseHistory, now, {}, Math.random, { first: true }).delay
+    }
     onTriggered: {
+      var now = Date.now()
+      if (now < root.surpriseNextAt) return
       var came = false
       try { came = root.surpriseAttempt("", false).came } catch (e) { root.noteFault("surprise scheduler", e) }
-      interval = Policy.planSurprise(root.surpriseHistory, Date.now(), {}, Math.random, { missed: !came }).delay
-      root.surpriseNextAt = Date.now() + interval
-      restart()
+      root.surpriseMisses = came ? 0 : root.surpriseMisses + 1
+      root.surpriseNextAt = now + Policy.planSurprise(root.surpriseHistory, now, {}, Math.random, { missed: !came }).delay
     }
   }
+  property int surpriseMisses: 0
 
   // One try: picks what may come (or takes `kind`), checks it may, and
   // sends it. A manual call (`flurry surprise rabbit`) skips the timing and
   // the surprises switch but not the sense: no hare in the rain.
   function surpriseAttempt(kind, manual) {
-    var scene = focusedScene()
+    var scene = liveScene()
     var res = { at: new Date().toISOString(), kind: "", came: false, why: "", manual: !!manual }
     if (!scene || !root.active) { res.why = "no screen"; root.surpriseLast = res; return res }
     var ctx = surpriseContextOf(scene)
@@ -1622,7 +1746,7 @@ Item {
       gates: { enabled: root.saved.enabled, effect: root.saved.effect, surprises: root.saved.surprises, calm: root.calmActive,
                calmMode: root.saved.calm, decorating: root.decorating, onBattery: root.onBattery, quality: root.quality,
                dayCycle: root.saved.dayCycle, plow: root.saved.plow, fullscreen: scene ? scene.fullscreenApp : false },
-      timer: { running: surpriseTimer.running, nextAt: root.surpriseNextAt },
+      timer: { running: surpriseTimer.running, nextAt: root.surpriseNextAt, misses: root.surpriseMisses },
       ctx: surpriseContextOf(scene), faults: faults
     }), null, 1)
   }
@@ -1741,6 +1865,7 @@ Item {
       "flurry-bed", root.soundDir.replace(/\/$/, ""), root.cliBedVolume.toFixed(2), String(Math.round(root.cliBedVolume * 65536)),
       String(Snd.BED_SECONDS - Snd.BED_OVERLAP)].concat(Snd.bedTakes(root.cliBed))
     running: false
+    onRunningChanged: root.cliBedStartedAt = running ? root.cliBedVolume : -1
     onExited: {
       if (cliBedPlayer.pendingRestart) {
         cliBedPlayer.pendingRestart = false
@@ -1759,8 +1884,20 @@ Item {
     }
   }
   onCliBedChanged: restartCliBed()
+  // A level that drifts (the storm's wetness eases in over half a minute)
+  // restarted the player, cutting the bed off mid-take, at every 0.05 step.
+  // Only a real change of level does now.
+  property real cliBedStartedAt: -1
   onCliBedVolumeChanged: if (root.cliBed !== "") cliBedTweak.restart()
-  Timer { id: cliBedTweak; interval: 600; onTriggered: root.restartCliBed() }
+  Timer {
+    id: cliBedTweak
+    interval: 600
+    onTriggered: {
+      var was = root.cliBedStartedAt, now = root.cliBedVolume
+      if (cliBedPlayer.running && was > 0 && now > 0 && Math.abs(now - was) < 0.15) return
+      root.restartCliBed()
+    }
+  }
 
   function playCue(ev) {
     if (!root.soundOn) return
