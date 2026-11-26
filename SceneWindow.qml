@@ -84,6 +84,9 @@ PanelWindow {
   function freshWorld() {
     var w = Sim.createWorld(width, height, { effect: service ? service.effect : "snow", intensity: service ? service.intensity : 1, groundInset: groundInset, plow: service ? service.plowOn : true })
     if (service) Sim.setEnv(w, service.env)
+    // One stash for every screen: a window moved to another monitor, or
+    // away to another workspace and back, keeps what lies on it.
+    if (service && service.sharedStash) w.shared = service.sharedStash
     return w
   }
   Component.onCompleted: {
@@ -108,6 +111,7 @@ PanelWindow {
   function recoverWorld() {
     console.warn("flurry: the scene on " + screenName + " kept failing; starting it afresh")
     try { Sim.letGo(world) } catch (e) { }
+    try { Sim.forgetWorld(world) } catch (e2) { }
     world = freshWorld()
     applyFeatures()
     anchorReset()
@@ -116,6 +120,7 @@ PanelWindow {
     canvas.requestPaint()
   }
   Component.onDestruction: {
+    if (world) Sim.forgetWorld(world)
     anchorReset()
     if (service) service.unregisterScene(screenName, sceneWin)
   }
@@ -281,7 +286,7 @@ PanelWindow {
       if (sceneWin.live) {
         sceneWin.world.quality = sceneWin.service.quality
         var p = sceneWin.service.pointer
-        var sx = sceneWin.screen ? sceneWin.screen.x : 0, sy = sceneWin.screen ? sceneWin.screen.y : 0
+        var sx = sceneWin.originX, sy = sceneWin.originY
         var local = p.present ? { x: p.x - sx, y: p.y - sy, vx: p.vx, vy: p.vy,
                                   present: p.x >= sx && p.x < sx + sceneWin.width
                                         && p.y >= sy && p.y < sy + sceneWin.height,

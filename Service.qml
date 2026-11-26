@@ -12,6 +12,7 @@ import "lib/theme.js" as Theme
 import "lib/policy.js" as Policy
 import "lib/sound.js" as Snd
 import "lib/draw.js" as Draw
+import "lib/sim.js" as Sim
 
 // Flurry's headless core. Owns the saved state, the per-screen scenes, the
 // window and pointer feeds the simulation reads, the visitors' schedule, and
@@ -178,6 +179,9 @@ Item {
   // Each scene reports in, so the service can hand a visitor or a delivery to
   // the screen that should show it.
   property var scenes: ({})
+  // What lies on windows out of sight (another workspace, another
+  // monitor), shared by every screen's world (Sim.stashSurface).
+  readonly property var sharedStash: Sim.sharedStash()
   function registerScene(name, scene) {
     var next = Object.assign({}, root.scenes); next[name] = scene; root.scenes = next
   }
