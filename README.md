@@ -82,6 +82,48 @@ Scroll on the bar icon to flip through them, or `flurry effect sakura`.
 
 <sub>These six tiles are drawn by Flurry's own simulation and painter (`lib/sim.js`, `lib/draw.js`) over Omarchy theme wallpapers. Every other picture here is a screenshot of the real Omarchy shell.</sub>
 
+## 🖼️ Weather wallpaper
+
+| | | |
+|:---:|:---:|:---:|
+| <img src="docs/wallpapers/snow.jpg" alt="Snow wallpaper"> | <img src="docs/wallpapers/rain.jpg" alt="Rain wallpaper"> | <img src="docs/wallpapers/sakura.jpg" alt="Sakura wallpaper"> |
+| **Snow**: snow on the roof, the trees and the meadow, cold blue-grey light | **Rain**: overcast, mist in the pines, a wet sheen on the grass | **Sakura**: the cherry tree in full bloom, petals on the grass |
+| <img src="docs/wallpapers/clear.jpg" alt="Clear wallpaper"> | <img src="docs/wallpapers/autumn.jpg" alt="Autumn wallpaper"> | <img src="docs/wallpapers/night.jpg" alt="Night wallpaper"> |
+| **Clear**: a bright, crisp winter day | **Autumn**: amber leaves, golden grass | **Night**: stars over the snow, lit windows |
+
+Turn on **Weather wallpaper** in the panel (or `flurry wallpaper on`) and the desktop behind
+your windows becomes a painting of the weather Flurry is showing. Switch from snow to rain and
+the valley slowly clouds over and gets wet; switch to sakura and the cherry tree blooms. All
+seven paintings are the same cabin, tree and mountains, so a change looks like the weather
+turning, not a new picture. None of them has anything falling in the air: Flurry draws the
+snow, rain and petals itself, and the flat meadow along the bottom is where they settle and
+where the plow drives.
+
+The change is a slow crossfade (10 seconds by default) eased like dusk: it starts and ends so
+gently you don't see it begin, with a faint warm-then-cool shift in the light halfway. It
+happens on Flurry's own layer under every window, one per monitor, decoded at that monitor's
+size. Nothing repaints between changes. Your own Omarchy wallpaper is never touched: it stays
+underneath, and turning the feature off fades the painting away to show it again.
+
+| Scene | Painting |
+|:--|:--|
+| Snow; live weather snow, flurries or blizzard | snow |
+| Rain; live weather rain or sleet | rain |
+| Live weather clear (after dark with the day cycle on: night) | clear |
+| Sakura; the spring around Nowruz | sakura |
+| Leaves | autumn |
+| Starfall | night |
+| Fireflies | summer night |
+
+```bash
+flurry wallpaper on|off|toggle
+flurry wallpaper fade 12    # crossfade length in seconds, 2 to 60
+flurry wallpaper            # on or off, and which painting
+```
+
+The paintings are 7680×4320 JPEGs in `wallpapers/` (about 15 MB together); the
+smaller copies in `docs/wallpapers/` are for this page.
+
 ## 🎄 Decorate your desktop
 
 <img src="docs/screenshots/decorations.jpg" alt="A decorated tree, a snowman with a blue scarf and a wrapped present on the snowy ground" width="100%">
@@ -484,6 +526,7 @@ flurry intensity 1.5
 flurry decorate | santa | yeti | clear
 flurry plow               # call the snow plow now (refused while it's switched off)
 flurry plow on|off|toggle # the Snow plow switch
+flurry wallpaper on|off|toggle   # the Weather wallpaper switch; `fade <seconds>` sets the crossfade
 flurry surprise bird      # or rabbit, golden: one now, whatever the timer and weather
 flurry freeze             # icicles and frost on the windows in view, now
 flurry diag               # what each feature is doing and why
@@ -546,6 +589,8 @@ about 0.25 ms a frame on a 2560×1440 screen with six windows at full snow
 drawing a frame (also under node), and six snowballs about 0.1 ms of
 simulation and 2 ms of drawing; a tree's lights repaint
 at 30 fps on their own layer and the rest of the tree only when it changes.
+The weather wallpaper is a still image that repaints only during its
+crossfade, and skips the fade on a screen under a fullscreen app.
 
 ## Development
 

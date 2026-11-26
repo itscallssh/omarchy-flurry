@@ -14,6 +14,7 @@ import "lib/policy.js" as Policy
 import "lib/sound.js" as Snd
 import "lib/draw.js" as Draw
 import "lib/sim.js" as Sim
+import "lib/wallpaper.js" as Wallpaper
 
 // Flurry's headless core. Owns the saved state, the per-screen scenes, the
 // window and pointer feeds the simulation reads, the visitors' schedule, and
@@ -101,6 +102,31 @@ Item {
     if (name === "liveWeather" && on) weatherSoon.restart()
     if (name === "surprises" && !on) dismissCritters()
     return true
+  }
+  // Weather wallpaper (WallpaperWindow.qml): off unless asked for.
+  readonly property bool wallpaperOn: root.loaded && !!root.saved.wallpaper
+  // The painting for the scene now; a clear sky after dark is the night one
+  // (only with the day cycle on: without it there is no clock to follow).
+  readonly property string wallpaperImage: Wallpaper.imageFor(root.sceneMode, { sun: root.saved.dayCycle ? root.env.sun : 1 })
+  readonly property int wallpaperFadeMs: Math.round(Wallpaper.fadeSeconds(root.saved.wallpaperFade) * 1000)
+  // Fades only while someone could see them: not while Flurry is on but
+  // hidden (a fullscreen app on every screen). Each screen also skips the
+  // fade under its own fullscreen app.
+  readonly property bool wallpaperAnimate: root.loaded && (root.showing || !root.saved.enabled)
+  function setWallpaper(on) { update(function(s) { s.wallpaper = !!on }) }
+  function wallpaperCommand(mode, value) {
+    mode = String(mode || "").trim().toLowerCase()
+    if (mode === "on" || mode === "off") { setWallpaper(mode === "on"); return mode }
+    if (mode === "toggle") { setWallpaper(!root.saved.wallpaper); return root.saved.wallpaper ? "on" : "off" }
+    if (mode === "fade") {
+      var n = Number(value)
+      if (String(value || "").trim() === "" || !isFinite(n)) return "wallpaper fade: seconds, " + Wallpaper.FADE_MIN + " to " + Wallpaper.FADE_MAX
+      update(function(s) { s.wallpaperFade = Wallpaper.fadeSeconds(n) })
+      return String(root.saved.wallpaperFade) + " s"
+    }
+    if (mode === "" || mode === "status")
+      return (root.saved.wallpaper ? "on: " + root.wallpaperImage : "off") + " (fade " + root.saved.wallpaperFade + " s)"
+    return "wallpaper: on, off, toggle, status, or fade <seconds>"
   }
   function toggleFlag(name) { setFlag(name, !root.saved[name]); return root.saved[name] ? "on" : "off" }
   function setCalm(mode) {
@@ -1959,6 +1985,7 @@ Item {
       calm: root.calmActive, onBattery: root.onBattery, battery: root.batteryPercent, fps: root.fpsCap,
       theme: root.theme ? root.theme.source : "off", ornamentStyle: root.saved.ornamentStyle,
       ornamentStyles: root.saved.ornamentStyles, preview: root.seasonOverride,
+      wallpaper: { on: root.saved.wallpaper, image: root.wallpaperImage, fadeSeconds: root.saved.wallpaperFade },
       windows: { live: root.liveWindows ? Object.keys(root.liveWindows).length : -1, closed: Object.keys(root.closedWindows).length }
     })
   }
@@ -1976,6 +2003,7 @@ Item {
     function santa(): string { return root.summonSanta() ? "ho ho ho" : "no screen" }
     function lights(): string { return root.focusedLights() }
     function plow(mode: string): string { return root.plowCommand(mode) }
+    function wallpaper(mode: string, value: string): string { return root.wallpaperCommand(mode, value) }
     function snowballs(): string { root.setSnowballs(!root.saved.snowballs); return root.saved.snowballs ? "on" : "off" }
     function yeti(): string { return root.summonYeti() ? "grr" : "no screen" }
     function clear(): string { root.clearDecorations(); return "ok" }
@@ -2021,6 +2049,19 @@ Item {
     model: Quickshell.screens
     delegate: Component {
       SceneWindow {
+        required property var modelData
+        screen: modelData
+        service: root
+      }
+    }
+  }
+
+  // ------------------------------------------------- weather wallpaper
+
+  Variants {
+    model: Quickshell.screens
+    delegate: Component {
+      WallpaperWindow {
         required property var modelData
         screen: modelData
         service: root
