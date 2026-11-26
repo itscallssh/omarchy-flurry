@@ -257,8 +257,10 @@ test("snow melts after switching effect", () => {
 
 // ------------------------------------------------------------------ the plow
 
+// The plow's own mechanics, without its hare and robin coming first
+// (arrival: false; the sequence is tested in arrival.test.js).
 function snowyGround(fill) {
-  const w = S.createWorld(1280, 720, { effect: "snow", intensity: 0.25 })
+  const w = S.createWorld(1280, 720, { effect: "snow", intensity: 0.25, arrival: false })
   const g = w.surfaces[S.GROUND_ID]
   for (let i = 0; i < g.bins.length; i++) g.bins[i] = S.TUNING.snow.groundCap * fill * (0.8 + 0.4 * ((i * 7) % 10) / 10)
   return w

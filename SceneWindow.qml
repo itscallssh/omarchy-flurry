@@ -140,13 +140,25 @@ PanelWindow {
     function onSavedChanged() { sceneWin.applyFeatures(); sceneWin.wake() }
     function onThrowOnChanged() { sceneWin.applyFeatures() }
     function onWindowBorderChanged() { sceneWin.applyFeatures() }
+    function onCalmActiveChanged() { sceneWin.applyFeatures(); sceneWin.wake() }
     function onThemeChanged() { canvas.requestPaint() }
   }
 
   function applyFeatures() {
     if (!world || !service) return
     Sim.setFeatures(world, { gusts: service.saved.windGusts, icicles: service.saved.dayCycle, throwOut: service.throwOn,
-                             border: service.windowBorder })
+                             border: service.windowBorder, calm: service.calmActive })
+  }
+  // Another workspace on this screen mid-sequence: the hare and the robin
+  // run and fly off, and the plow is let go (it rests, then comes again
+  // with them once the ground is still deep).
+  property string arrivalWorkspace: ""
+  onWorkspaceChanged: {
+    var id = workspace ? String(workspace.id) : ""
+    if (id === arrivalWorkspace) return
+    var had = arrivalWorkspace !== ""
+    arrivalWorkspace = id
+    if (had && world && Sim.cancelArrival(world, "workspace switched", "leave")) wake()
   }
 
   // Turned off: Santa does not finish his crossing over an empty sky. (The
@@ -157,6 +169,10 @@ PanelWindow {
   onLiveChanged: {
     wake()
     if (live || !world) return
+    // Hidden (a fullscreen app, Flurry off) mid-sequence: the plow's hare and
+    // robin are simply gone and the plow is not held (Sim.cancelArrival); it
+    // comes again with them once the scene shows and the ground is deep.
+    Sim.cancelArrival(world, fullscreenApp ? "fullscreen app" : "Flurry off", "remove")
     // Off: nothing keeps falling in the background, and the canvas is cleared.
     world.particles = []
     if (goldenZone.w > 0) goldenZone = noZone
@@ -906,8 +922,14 @@ PanelWindow {
 
   // ------------------------------------------------------------ visitors
 
-  // "sent", "off" (the switch is off) or "out" (one is already on its way).
-  function callPlow() { wake(); return world ? Sim.requestPlow(world) : "no screen" }
+  // "sent", "off" (the switch is off), "out" (one is already on its way)
+  // or "coming" (its hare and robin are here; it follows them).
+  function callPlow() {
+    if (!world) return "no screen"
+    if (!live) return fullscreenApp ? "a fullscreen app is up" : "Flurry is off"
+    wake()
+    return Sim.requestPlow(world)
+  }
 
   // The snow globe: everything lying about lifts and swirls, and the
   // decorations rock.
@@ -934,6 +956,7 @@ PanelWindow {
     if (!live) return { offline: effectOn ? "a fullscreen app is up" : "Flurry is off", fullscreen: fullscreenApp }
     var c = Sim.critterContext(world)
     c.fullscreen = fullscreenApp
+    c.plowArrival = Sim.arrivalSummary(world)
     // A window being dragged (or anything moved in the last moment and the
     // pointer is moving): nothing lands on a moving target.
     // Only a real drag: a window changing place in the last half second

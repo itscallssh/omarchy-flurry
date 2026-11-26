@@ -965,7 +965,9 @@ Item {
     if (!root.saved.plow) return "the snow plow is off (flurry plow on)"
     var scene = focusedScene()
     var got = scene ? scene.callPlow() : "no screen"
-    return got === "sent" ? "on its way" : (got === "out" ? "already out" : (got === "off" ? "the snow plow is off (flurry plow on)" : got))
+    return got === "sent" ? "on its way: the hare and the robin come first"
+         : (got === "coming" ? "already on its way (its hare and robin are here)"
+         : (got === "out" ? "already out" : (got === "off" ? "the snow plow is off (flurry plow on)" : got)))
   }
   function plowCommand(mode) {
     mode = String(mode || "").trim().toLowerCase()

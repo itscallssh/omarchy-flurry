@@ -101,6 +101,11 @@ When the snow along the bottom gets deep, a little yellow bulldozer drives in, d
 blade and shoves it all off the far side. It's part of the simulation, not an animation on
 top: the berm grows, chunks tumble off it, and its weight slows the dozer down.
 
+It never comes unannounced. First the winter hare hops in onto the snow; five seconds later a
+robin flies in and lands near it. The two potter about for a few seconds, hopping, sniffing,
+pecking, sitting up, and then the plow rumbles in. The hare bolts away from it and the robin
+takes off, and the plow clears the snow.
+
 ## 🐇 Little visitors
 
 | | |
@@ -217,8 +222,10 @@ frame the snow feels gravity minus the window's acceleration:
 <details>
 <summary><b>More about the snow plow</b></summary>
 
-When snow along the bottom of the screen gets deep (on average 42% of the
-way to full), a yellow bulldozer drives in from the edge with its blade up,
+The trigger is the depth of the ground snow, never a timer: when the snow
+along the bottom of the screen gets deep (on average 42% of the way to full,
+about 11 px all along; `PLOW.threshold` in `lib/sim.js`, checked twice a
+second), a yellow bulldozer drives in from the edge with its blade up,
 lowers it, and pushes the snow across and off the far side. It's part of
 the simulation, not an animation over it:
 
@@ -233,8 +240,40 @@ the simulation, not an animation over it:
 - The exhaust puffs harder under load and drifts on the wind; the beacon
   turns; snow settles on the cab roof and slides off when it pulls away.
 
-It leaves once its rear is past the edge, rests at least six seconds, and
-comes back from the other side next time the snow builds up.
+It leaves once its rear is past the edge, rests at least six seconds
+(`PLOW.rest`, the cooldown), and comes back from the other side next time
+the snow builds up past the threshold.
+
+**Its visitors come first.** Every plow run, whether the deep snow called it,
+you pressed the plow button in the panel, or ran `flurry plow`, goes like
+this (`ARRIVAL` in `lib/sim.js` holds every timing):
+
+1. The plow is held. The winter hare hops in from the far edge (the side the
+   plow won't come from) onto the ground snow.
+2. 5 s after the hare is in (`birdDelay`), the robin flies in from the same
+   side and lands on the ground near it, or on a low window ledge close by.
+3. Both stay and potter about: the hare walks, hops, sniffs at the snow and
+   sits up to look about; the robin hops and pecks. This lasts 6–8 s after
+   the robin lands (`linger`).
+4. The plow drives in. They react to it, not to a clock: once it shows on the
+   screen the hare sits up and stares for a moment, then bolts off the screen
+   away from it (at once if it gets within 340 px, `hareFlee`), and the robin
+   takes off the same way (`birdFlee`, 420 px).
+5. The plow clears the snow as usual.
+
+A hare or robin already on the screen is taken into the sequence rather than
+a second one sent, and while it runs the random visitors don't come (the
+panel says "the plow's visitors are here"). It runs in any sky the plow
+runs in: rain, sleet or a blizzard on live weather keep the *random* robin
+and hare away, but the plow only comes with snow lying anyway, so its two
+come regardless. In calm mode the plow comes alone. If the scene hides (a
+fullscreen app, Flurry off) or you switch workspace mid-sequence, it is
+cancelled: the visitors leave (or are simply gone, when hidden), and the
+plow is never held: it rests 10 s (`retry`) and then the deep snow calls it,
+with its visitors, again. However things go, the plow is held at most 40 s
+(`maxHold`). A call while the visitors are already here answers "already on
+its way". `flurry diag` shows the sequence under `plowArrival`: its timings,
+the phase it is in and what comes next, and the last run's log with times.
 
 **The Snow plow switch** (in the menu, or `flurry plow on|off|toggle`) is on
 by default. Off, the plow never comes: not when the snow builds up, and not
@@ -383,7 +422,7 @@ Flurry reads `~/.local/state/omarchy/current/theme/colors.toml` and tints the wi
 The first visitor comes within a minute or two after Flurry starts, then one every two to four and a half minutes, never the same one twice running unless it's the only one that can come.
 
 - **A robin** lands on a window ledge (snowy or bare, even one right under the bar), on the plow's roof, or on the ground. It hops, pecks, cocks its head, leaves tiny footprints, and flies off when your cursor comes close, its window moves, or a snowball flies near.
-- **A winter hare** (white, with black-tipped ears) comes in from the edge of the screen with a few low hops, then mostly walks the way a hare does when it is in no hurry: the forefeet reach ahead one after the other, then the hind feet come up together under it, leaving a trail of prints in the snow. Now and then it runs a few hops, and between runs it stops to nibble at the snow, sit up tall with its ears raised and its nose twitching, or just sit, an ear flicking back now and then. After half a minute to a minute it heads off the nearer edge. It bolts when your cursor comes close, a snowball lands near it, or the plow comes.
+- **A winter hare** (white, with black-tipped ears) comes in from the edge of the screen with a few low hops, then mostly walks the way a hare does when it is in no hurry: the forefeet reach ahead one after the other, then the hind feet come up together under it, leaving a trail of prints in the snow. Now and then it runs a few hops, and between runs it stops to nibble at the snow, sit up tall with its ears raised and its nose twitching, or just sit, an ear flicking back now and then. After half a minute to a minute it heads off the nearer edge. It bolts when your cursor comes close, a snowball lands near it, or the plow comes. Before every plow run the hare comes on purpose, with a robin five seconds behind it (see the snow plow).
 - **The golden snowflake**, very rarely. Catching it unlocks a new bauble finish for the tree (`flurry ornaments [style]`).
 
 They come only when it makes sense. The scene's mode is the effect, or with the Snow effect the live weather (`snow`, `flurries`, `blizzard`, `sleet`, `rain`, `clear`; plain `snow` with live weather off), or `spring` once the thaw is well along:
@@ -465,7 +504,9 @@ switches), the surprise scheduler (running or not, seconds to the next try,
 the last attempt with what came or why nothing did, recent visitors, and for
 the robin, the hare and the golden flake either "can come" or the reason
 they can't), the scene (perches a bird could use, ground snow depth and
-cover, sprouts, who is on screen, whether the plow is out), the ice
+cover, sprouts, who is on screen, whether the plow is out), the plow's
+visitors (`plowArrival`: the timings, the sequence now with its phase and
+what comes next, and the last one's steps with their times), the ice
 (icicle count, whether they're growing, and per window its snow depth,
 icicles, where they hang, frost and glaze), and any feature that failed.
 
@@ -517,7 +558,9 @@ shell. `tests/render-preview.js` paints every effect to PNG with
 `tests/render-physics.js` renders a filmstrip of a snowy window being flung
 and stopped (`docs/physics.png`). `tests/render-plow.js` lets the snow pile
 up until the plow comes, then renders its pass and a close-up
-(`docs/plow.png`). `tests/render-lights.js` renders a decorated tree and a
+(`docs/plow.png`). `tests/render-plow-sequence.js` renders the plow's
+arrival (hare, robin 5 s later, lingering, the flight from the plow, the
+clearing) as a five-frame strip, seeded. `tests/render-lights.js` renders a decorated tree and a
 light string being dragged (`docs/tree.png`, `docs/window-lights.png`).
 `tests/render-snowballs.js` scoops, rolls, lifts, throws, bursts and stacks
 snowballs (`docs/snowballs.png`). `tests/qtcanvas.js` is a strict stand-in
