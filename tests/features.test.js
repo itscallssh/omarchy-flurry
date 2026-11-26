@@ -403,6 +403,16 @@ test("a hare hops across the ground snow, leaving paired hind and fore prints", 
 })
 
 test("a hare sits up now and then, ears raised, and bolts when a snowball lands near it", () => {
+  // Seeded, so the run is the same alone or in the full suite (it used to
+  // draw on whatever Math.random the earlier tests had left it at and
+  // could go 40 s without one sit-up); the sim also caps the low stops in
+  // a row (RABBIT.maxLowStops), so any seed sits up.
+  const rnd = Math.random
+  let seed = 20261126
+  Math.random = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296 }
+  try { hareSitsUp() } finally { Math.random = rnd }
+})
+function hareSitsUp() {
   const { w, r } = snowy()
   S.spawnRabbit(w, { dir: 1 })
   w.rabbit.stay = 1e9
@@ -418,7 +428,7 @@ test("a hare sits up now and then, ears raised, and bolts when a snowball lands 
   w2.thud = { x: w2.rabbit.x + 60, y: 990, t: w2.time }
   run(w2, 0.05, [r])
   assert.strictEqual(w2.rabbit.mode, "bolt")
-})
+}
 
 test("switched off (or calm), visitors leave gracefully: the bird flies, the hare bolts", () => {
   const { w, r } = snowy()

@@ -21,15 +21,26 @@ test("snow piles up on an exposed window top and the ground", () => {
   assert.ok(Math.max(...w.surfaces.a.bins) <= S.TUNING.snow.cap + 1e-6)
 })
 
-test("a covered top edge collects nothing under the front window", () => {
+// Windows are panes, not roofs (bug 3), and what rests on a window is drawn
+// with that window, so a window in front hides it (bug 1). A covered top
+// edge therefore keeps collecting, out of sight, from the snowfall that
+// passes behind the front window (e858117): when the front window leaves,
+// the ledge behind is as deep as the rest of it (recording 11-39-11 @27 s).
+// It only gets what goes on past the front window's own ledge, so it is
+// never deeper than that ledge.
+test("a covered top edge collects only out of sight, behind the front window", () => {
   const w = S.createWorld(1000, 800, { effect: "snow", intensity: 2 })
   const rects = [
     { id: "back", x: 100, y: 300, w: 800, h: 300, floating: false, z: 3 },
     { id: "front", x: 50, y: 200, w: 900, h: 500, floating: true, z: 0 }
   ]
   run(w, 30, rects)
-  assert.strictEqual(w.surfaces.back.bins.reduce((x, y) => x + y, 0), 0)
-  assert.ok(w.surfaces.front.bins.reduce((x, y) => x + y, 0) > 10)
+  const back = w.surfaces.back.bins.reduce((x, y) => x + y, 0)
+  const front = w.surfaces.front.bins.reduce((x, y) => x + y, 0)
+  assert.ok(front > 10, "the front window's ledge fills: " + front)
+  assert.ok(back > 10, "the hidden ledge behind fills too: " + back)
+  // Per px of ledge it gets no more than the open front ledge does.
+  assert.ok(back / 800 < 1.25 * front / 900, back + " behind vs " + front + " in front")
 })
 
 // A snowy floating window with the snow switched off, so only the physics
