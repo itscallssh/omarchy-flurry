@@ -220,8 +220,11 @@ Item {
     return null
   }
   // The scene whose screen shows this window now, if any.
-  function sceneShowing(addr) {
-    for (var k in root.scenes) if (root.scenes[k].rectFor && root.scenes[k].rectFor(addr)) return root.scenes[k]
+  function sceneShowing(addr, except) {
+    for (var k in root.scenes) {
+      var sc = root.scenes[k]
+      if (sc && sc !== except && sc.rectFor && sc.rectFor(addr)) return sc
+    }
     return null
   }
   function sceneForPlace(place) {
@@ -634,6 +637,12 @@ Item {
       case "monitoradded": case "monitoraddedv2": case "monitorremoved": case "monitorremovedv2":
       case "configreloaded": case "openlayer": case "closelayer":
         monitorsSoon.restart()
+        break
+      case "activespecial": case "activespecialv2":
+        // Which special workspace a monitor shows is read from its
+        // lastIpcObject, which only refreshMonitors() fills: read it now,
+        // or the scratchpad's windows keep (or never get) their ledges.
+        Hyprland.refreshMonitors()
       }
       switch (name) {
       case "closewindow":
@@ -649,13 +658,13 @@ Item {
       // Focus changes are left out: clicking a window to drag it is one.
       case "openwindow": case "closewindow": case "movewindowv2": case "changefloatingmode":
       case "fullscreen": case "workspacev2": case "focusedmonv2": case "moveworkspacev2":
-      case "activespecial": case "minimized":
+      case "activespecial": case "activespecialv2": case "minimized":
         root.lastLayoutEvent = Date.now()
       }
       switch (name) {
       case "openwindow": case "closewindow": case "movewindowv2": case "changefloatingmode":
       case "fullscreen": case "workspacev2": case "focusedmonv2":
-      case "moveworkspacev2": case "activespecial": case "minimized":
+      case "moveworkspacev2": case "activespecial": case "activespecialv2": case "minimized":
         { Hyprland.refreshToplevels(); root.windowsReadAt = Date.now() }
         root.noteMotion()
         clientsSoon.restart()
@@ -1852,6 +1861,7 @@ Item {
       "flurry-bed", root.soundDir.replace(/\/$/, ""), root.cliBedVolume.toFixed(2), String(Math.round(root.cliBedVolume * 65536)),
       String(Snd.BED_SECONDS - Snd.BED_OVERLAP)].concat(Snd.bedTakes(root.cliBed))
     running: false
+    onRunningChanged: root.cliBedStartedAt = running ? root.cliBedVolume : -1
     onExited: {
       if (cliBedPlayer.pendingRestart) {
         cliBedPlayer.pendingRestart = false
@@ -1870,8 +1880,20 @@ Item {
     }
   }
   onCliBedChanged: restartCliBed()
+  // A level that drifts (the storm's wetness eases in over half a minute)
+  // restarted the player, cutting the bed off mid-take, at every 0.05 step.
+  // Only a real change of level does now.
+  property real cliBedStartedAt: -1
   onCliBedVolumeChanged: if (root.cliBed !== "") cliBedTweak.restart()
-  Timer { id: cliBedTweak; interval: 600; onTriggered: root.restartCliBed() }
+  Timer {
+    id: cliBedTweak
+    interval: 600
+    onTriggered: {
+      var was = root.cliBedStartedAt, now = root.cliBedVolume
+      if (cliBedPlayer.running && was > 0 && now > 0 && Math.abs(now - was) < 0.15) return
+      root.restartCliBed()
+    }
+  }
 
   function playCue(ev) {
     if (!root.soundOn) return

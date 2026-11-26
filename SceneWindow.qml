@@ -26,7 +26,7 @@ PanelWindow {
   // Whether a fullscreen app covers this screen. Read straight from
   // Hyprland, then applied a moment later: hiding the scene changes what
   // Hyprland reports in the same pass, and a direct binding would loop.
-  readonly property bool fullscreenNow: !!workspace && workspace.hasFullscreen && fullscreenMode() >= 2
+  readonly property bool fullscreenNow: !!workspace && fullscreenMode() >= 2
   property bool fullscreenApp: false
   onFullscreenNowChanged: Qt.callLater(syncFullscreen)
   function syncFullscreen() { if (fullscreenApp !== fullscreenNow) fullscreenApp = fullscreenNow }
@@ -60,14 +60,14 @@ PanelWindow {
 
   // Hyprland's fullscreen state of each window on this workspace; a real
   // fullscreen one (not just maximized) pauses the scene, simulation and all.
+  // The open special workspace counts too: a fullscreen app in the
+  // scratchpad covers the screen as much as one on the workspace below.
   function fullscreenMode() {
-    var modes = []
-    var list = workspace && workspace.toplevels ? workspace.toplevels.values : []
-    for (var i = 0; i < list.length; i++) {
-      var ipc = list[i].lastIpcObject
-      if (ipc && ipc.fullscreen) modes.push(Number(ipc.fullscreen))
-    }
-    return Policy.fullscreenActive(modes) ? 2 : 0
+    var mon = monitor && monitor.lastIpcObject ? monitor.lastIpcObject : null
+    var special = mon && mon.specialWorkspace && mon.specialWorkspace.id ? Number(mon.specialWorkspace.id) : 0
+    var all = Hyprland.toplevels.values, items = []
+    for (var i = 0; i < all.length; i++) items.push(all[i].lastIpcObject)
+    return Policy.fullscreenOn(items, workspace ? Number(workspace.id) : NaN, special) ? 2 : 0
   }
 
   // ------------------------------------------------------------ simulation
@@ -120,7 +120,9 @@ PanelWindow {
     canvas.requestPaint()
   }
   Component.onDestruction: {
-    if (world) Sim.forgetWorld(world)
+    // A monitor unplugged: its windows move to another screen, and what
+    // lies on them goes along (put aside in the shared stash for it).
+    if (world) Sim.forgetWorld(world, { stash: true })
     anchorReset()
     if (service) service.unregisterScene(screenName, sceneWin)
   }
@@ -429,7 +431,7 @@ PanelWindow {
   property bool ballsMoving: false
 
   Timer {
-    interval: sceneWin.ballsMoving ? 50 : 200
+    interval: sceneWin.ballsMoving ? 50 : (sceneWin.idle ? 1000 : 200)
     repeat: true
     running: sceneWin.snowballsOn
     onTriggered: {
@@ -533,7 +535,12 @@ PanelWindow {
     var toClear = [], filesToDelete = []
     for (var i = 0; i < gone.length; i++) {
       var id = gone[i]
-      if (!service || !service.sceneShowing(id)) {
+      // Cleared unless another screen's live scene shows the window now.
+      // (This scene's own windows count as not shown: it is letting go of
+      // them, going under a fullscreen app or switching the plugin off.
+      // Asking sceneShowing alone found this scene and cleared nothing,
+      // so a window's icicles and frost stayed drawn over a fullscreen app.)
+      if (!service || !service.sceneShowing(id, sceneWin)) {
         toClear.push(Policy.anchorClear(id))
         if (anchorActiveFiles[id]) filesToDelete = filesToDelete.concat(anchorActiveFiles[id])
       }
@@ -566,7 +573,7 @@ PanelWindow {
       for (var g = 0; g < gone.length; g++) {
         var gid = gone[g]
         delete held[gid]; delete anchorSigs[gid]; delete anchorAt[gid]
-        if (!service.sceneShowing(gid)) {
+        if (!service.sceneShowing(gid, sceneWin)) {
           clearCmds.push(Policy.anchorClear(gid))
           if (anchorActiveFiles[gid]) filesToDelete = filesToDelete.concat(anchorActiveFiles[gid])
         }
@@ -615,7 +622,14 @@ PanelWindow {
     service.anchorSend(Policy.anchorBatch(cmds), cmds.length, function(text) {
       var ok = Policy.anchorReplies(String(text || ""), cmds.length)
       if (sceneWin.anchorJob && sceneWin.anchorJob.seq === jobSeq) sceneWin.anchorJob = null
-      if (!sceneWin.anchorOn) { sceneWin.cleanupAnchorFiles(files); return }
+      if (!sceneWin.anchorOn) {
+        // Switched off (or hidden) while this set was on its way: the
+        // plugin took it, so it is cleared again, not left on the window.
+        if (!sceneWin.service.sceneShowing(id, sceneWin) && sceneWin.service.anchorAvailable)
+          sceneWin.service.anchorSend(Policy.anchorBatch([Policy.anchorClear(id)]), 1, null)
+        sceneWin.cleanupAnchorFiles(files)
+        return
+      }
       if (ok.every(function(v) { return v })) {
         var prev = sceneWin.anchorActiveFiles[id] || []
         var stale = prev.filter(function(p) { return files.indexOf(p) < 0 })

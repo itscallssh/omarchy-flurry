@@ -45,8 +45,14 @@ case $cmd in
     # The plugin folder this script lives in (bin/..), updated from git.
     dir=$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)
     id=""
-    if command -v jq >/dev/null 2>&1 && [[ -f "$dir/manifest.json" ]]; then
-      id=$(jq -r '.id // empty' "$dir/manifest.json" 2>/dev/null || true)
+    if [[ -f "$dir/manifest.json" ]]; then
+      if command -v jq >/dev/null 2>&1; then
+        id=$(jq -r '.id // empty' "$dir/manifest.json" 2>/dev/null || true)
+      else
+        # No jq: the folder's name is not the plugin id (a clone is called
+        # omarchy-flurry), so read "id" out of the manifest by hand.
+        id=$(sed -n 's/^[[:space:]]*"id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$dir/manifest.json" | head -n 1)
+      fi
     fi
     exec omarchy plugin update "${id:-$(basename "$dir")}" "$@" ;;
   -h|--help|help) sed -n 2,8p "$0" ;;
