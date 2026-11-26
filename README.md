@@ -102,8 +102,9 @@ blade and shoves it all off the far side. It's part of the simulation, not an an
 top: the berm grows, chunks tumble off it, and its weight slows the dozer down.
 
 It never comes unannounced. First the winter hare hops in onto the snow; five seconds later a
-robin flies in and lands near it. The two potter about for a few seconds, hopping, sniffing,
-pecking, sitting up, and then the plow rumbles in. The hare bolts away from it and the robin
+robin flies in and lands near it. The two potter about for a few seconds: the hare hops,
+sniffs and sits up, the robin hops and pecks near it and flits up to the top of a window and
+back down. Then the plow rumbles in. The hare bolts away from it and the robin
 takes off, and the plow clears the snow.
 
 ## 🐇 Little visitors
@@ -253,12 +254,14 @@ this (`ARRIVAL` in `lib/sim.js` holds every timing):
 2. 5 s after the hare is in (`birdDelay`), the robin flies in from the same
    side and lands on the ground near it, or on a low window ledge close by.
 3. Both stay and potter about: the hare walks, hops, sniffs at the snow and
-   sits up to look about; the robin hops and pecks. This lasts 6–8 s after
-   the robin lands (`linger`).
+   sits up to look about; the robin hops and pecks, and flits between the
+   ground near the hare and the tops of windows in view (1.4–2.4 s on each
+   perch). This lasts 6–8 s after the robin lands (`linger`).
 4. The plow drives in. They react to it, not to a clock: once it shows on the
    screen the hare sits up and stares for a moment, then bolts off the screen
    away from it (at once if it gets within 340 px, `hareFlee`), and the robin
-   takes off the same way (`birdFlee`, 420 px).
+   takes off the same way (`birdFlee`, 420 px), from the ground, a ledge or
+   mid-flight.
 5. The plow clears the snow as usual.
 
 A hare or robin already on the screen is taken into the sequence rather than
@@ -421,7 +424,7 @@ Flurry reads `~/.local/state/omarchy/current/theme/colors.toml` and tints the wi
 
 The first visitor comes within a minute or two after Flurry starts, then one every two to four and a half minutes, never the same one twice running unless it's the only one that can come.
 
-- **A robin** lands on a window ledge (snowy or bare, even one right under the bar), on the plow's roof, or on the ground. It hops, pecks, cocks its head, leaves tiny footprints, and flies off when your cursor comes close, its window moves, or a snowball flies near.
+- **A robin** lands on a window ledge (snowy or bare, even one right under the bar), on the plow's roof, or on the ground. It hops, pecks, cocks its head and leaves tiny footprints, then moves about: 2–4 short flights per visit between the ground and the tops of your windows, each on an arc with its wings beating, set to glide for the landing. On a snowy ledge it hops along and kicks a few flakes off. It stays 4.5–9 s on each perch and goes after the last one, so a visit lasts about 20–35 s. It only lands on the part of a window top you can see: never under a window in front of it, and never up under the bar. It flies off when your cursor comes close, its window moves, closes or goes fullscreen, or a snowball flies near. Tunables: `BIRD` in `lib/sim.js`.
 - **A winter hare** (white, with black-tipped ears) comes in from the edge of the screen with a few low hops, then mostly walks the way a hare does when it is in no hurry: the forefeet reach ahead one after the other, then the hind feet come up together under it, leaving a trail of prints in the snow. Now and then it runs a few hops, and between runs it stops to nibble at the snow, sit up tall with its ears raised and its nose twitching, or just sit, an ear flicking back now and then. After half a minute to a minute it heads off the nearer edge. It bolts when your cursor comes close, a snowball lands near it, or the plow comes. Before every plow run the hare comes on purpose, with a robin five seconds behind it (see the snow plow).
 - **The golden snowflake**, very rarely. Catching it unlocks a new bauble finish for the tree (`flurry ornaments [style]`).
 
@@ -560,7 +563,9 @@ and stopped (`docs/physics.png`). `tests/render-plow.js` lets the snow pile
 up until the plow comes, then renders its pass and a close-up
 (`docs/plow.png`). `tests/render-plow-sequence.js` renders the plow's
 arrival (hare, robin 5 s later, lingering, the flight from the plow, the
-clearing) as a five-frame strip, seeded. `tests/render-lights.js` renders a decorated tree and a
+clearing) as a five-frame strip, seeded. `tests/render-robin-perch.js`
+renders the robin's visit (on the ground, flying up, on a ledge, flying back
+down) as a four-frame strip. `tests/render-lights.js` renders a decorated tree and a
 light string being dragged (`docs/tree.png`, `docs/window-lights.png`).
 `tests/render-snowballs.js` scoops, rolls, lifts, throws, bursts and stacks
 snowballs (`docs/snowballs.png`). `tests/qtcanvas.js` is a strict stand-in

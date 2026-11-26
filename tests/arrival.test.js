@@ -79,7 +79,7 @@ test("before the plow: the hare comes, the robin 5 s later, both linger, the plo
   for (const s of linger) {
     assert.ok(!s.plow, "no plow while they linger")
     assert.ok(s.hare && s.hare !== "bolt", "the hare stays (" + s.hare + ")")
-    assert.strictEqual(s.bird, "perch", "the robin stays")
+    assert.ok(s.bird === "perch" || s.bird === "fly", "the robin stays, perched or flitting between perches (" + s.bird + ")")
   }
   assert.ok(new Set(linger.map(s => s.hare)).size >= 2, "the hare moves about: " + [...new Set(linger.map(s => s.hare))])
   assert.ok(samples.filter(s => s.t < called - 0.01).every(s => !s.plow), "the plow never came before its call")
