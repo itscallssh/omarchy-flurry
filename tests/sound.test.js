@@ -204,7 +204,7 @@ test("wiring: the panel switch and slider, the player, and every scene event rea
   assert.match(svc, /\.concat\(Snd\.bedTakes\(root\.cliBed\)\)/)
   // Without Qt Multimedia, or when it can't play, everything (the bed too)
   // goes through pw-play/paplay; and `flurry sound test|status` says why.
-  assert.match(player, /onStatusChanged: if \(status === SoundEffect\.Error\) root\.fail/)
+  assert.match(player, /onStatusChanged: if \((va|vb)\.status === SoundEffect\.Error\) root\.fail/)
   assert.match(svc, /readonly property bool qtSound: soundLoader\.status === Loader\.Ready && !!soundLoader\.item && !soundLoader\.item\.broken/)
   assert.match(svc, /readonly property string cliBed: root\.soundBackend === "cli" && root\.bedNow !== ""/)
   assert.match(svc, /pw-play --volume/)

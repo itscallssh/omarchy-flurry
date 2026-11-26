@@ -1,3 +1,4 @@
+pragma ComponentBehavior: Bound
 import QtQuick
 import qs.Commons
 import qs.Commons as Commons
@@ -39,22 +40,23 @@ Rectangle {
     Repeater {
       model: root.tools
       delegate: Rectangle {
+        id: tile
         required property var modelData
-        readonly property bool selected: root.scene && root.scene.tool === modelData.id
+        readonly property bool selected: root.scene && root.scene.tool === tile.modelData.id
         width: Math.max(64, label.implicitWidth + 14); height: 50
         radius: Math.max(0, Style.cornerRadius - 2)
-        color: selected ? Qt.rgba(Commons.Color.accent.r, Commons.Color.accent.g, Commons.Color.accent.b, 0.35)
+        color: tile.selected ? Qt.rgba(Commons.Color.accent.r, Commons.Color.accent.g, Commons.Color.accent.b, 0.35)
              : (hover.hovered ? Qt.rgba(Commons.Color.accent.r, Commons.Color.accent.g, Commons.Color.accent.b, 0.15) : "transparent")
         HoverHandler { id: hover }
         Column {
           anchors.centerIn: parent
           spacing: 2
-          Text { anchors.horizontalCenter: parent.horizontalCenter; textFormat: Text.PlainText; text: modelData.glyph; font.pixelSize: 18 }
+          Text { anchors.horizontalCenter: parent.horizontalCenter; textFormat: Text.PlainText; text: tile.modelData.glyph; font.pixelSize: 18 }
           Text {
             id: label
             anchors.horizontalCenter: parent.horizontalCenter
             textFormat: Text.PlainText
-            text: modelData.id === "tree" ? modelData.label + " " + (root.service ? root.service.saved.trees.length : 0) + "/3" : modelData.label
+            text: tile.modelData.id === "tree" ? tile.modelData.label + " " + (root.service ? root.service.saved.trees.length : 0) + "/3" : tile.modelData.label
             color: Commons.Color.popups.text
             font.family: Style.font.family
             font.pixelSize: Style.font.caption
@@ -63,7 +65,7 @@ Rectangle {
         MouseArea {
           anchors.fill: parent
           cursorShape: Qt.PointingHandCursor
-          onClicked: root.scene.tool = selected ? "" : modelData.id
+          onClicked: root.scene.tool = tile.selected ? "" : tile.modelData.id
         }
       }
     }

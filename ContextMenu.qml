@@ -1,3 +1,4 @@
+pragma ComponentBehavior: Bound
 import QtQuick
 import qs.Commons
 import qs.Commons as Commons
@@ -40,6 +41,7 @@ Rectangle {
     Repeater {
       model: root.rows
       delegate: Rectangle {
+        id: row
         required property var modelData
         width: column.width
         height: 30
@@ -50,15 +52,15 @@ Rectangle {
           anchors.verticalCenter: parent.verticalCenter
           x: 10
           textFormat: Text.PlainText
-          text: modelData.label
-          color: modelData.action === "remove" ? Commons.Color.urgent : Commons.Color.popups.text
+          text: row.modelData.label
+          color: row.modelData.action === "remove" ? Commons.Color.urgent : Commons.Color.popups.text
           font.family: Style.font.family
           font.pixelSize: Style.font.body
         }
         MouseArea {
           anchors.fill: parent
           cursorShape: Qt.PointingHandCursor
-          onClicked: root.run(modelData)
+          onClicked: root.run(row.modelData)
         }
       }
     }

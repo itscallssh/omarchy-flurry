@@ -1,3 +1,4 @@
+pragma ComponentBehavior: Bound
 import QtQuick
 import QtQml
 import QtMultimedia
@@ -121,9 +122,9 @@ Item {
       id: voice
       required property string modelData
       property bool flip: false
-      SoundEffect { id: va; source: root.dir + modelData + ".wav"; onStatusChanged: if (status === SoundEffect.Error) root.fail(String(source)) }
-      SoundEffect { id: vb; source: root.dir + modelData + ".wav"; onStatusChanged: if (status === SoundEffect.Error) root.fail(String(source)) }
-      Component.onCompleted: { var v = root.voices; v[modelData] = voice; root.voices = v }
+      SoundEffect { id: va; source: root.dir + voice.modelData + ".wav"; onStatusChanged: if (va.status === SoundEffect.Error) root.fail(String(va.source)) }
+      SoundEffect { id: vb; source: root.dir + voice.modelData + ".wav"; onStatusChanged: if (vb.status === SoundEffect.Error) root.fail(String(vb.source)) }
+      Component.onCompleted: { var v = root.voices; v[voice.modelData] = voice; root.voices = v }
       function fire(vol) {
         var s = flip ? vb : va
         flip = !flip
